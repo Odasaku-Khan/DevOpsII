@@ -18,7 +18,7 @@ resource "google_compute_network" "vpc_network" {
 }
 resource "google_compute_instance" "vm_instance" {
     name = "terraform-lab1"
-    machine_type = "e2-micro"
+    machine_type = "e2-medium"
     zone         = "us-central1-a"
 
 
