@@ -1,0 +1,181 @@
+- name: Setup script
+  hosts: all
+  become: yes
+  tasks: 
+    - name: Wait for cloud-init to finish
+      shell: cloud-init status --wait
+      args:
+        executable: /bin/bash
+    - name: Force HTTPS Ubuntu mirrors
+      replace:
+        path: /etc/apt/sources.list
+        regexp: 'http://ports.ubuntu.com'
+        replace: 'https://ports.ubuntu.com'
+
+    - name: Disable swap memory
+      command: swapoff -a
+      when: ansible_facts['swaptotal_mb'] > 0
+
+    - name: Remove(make comment) 
+      replace:
+        path: /etc/fstab
+        regexp: '^([^#].*?\sswap\s+.*)$'
+        replace: '# \1'
+
+    - name: Update cache 
+      apt: 
+        update_cache: yes
+
+    - name: Install Container runtime
+      apt: 
+        name: containerd 
+        state: present 
+
+    - name: Configure Containerd
+      shell: |
+        mkdir -p /etc/containerd
+        containerd config default > /etc/containerd/config.toml
+        sed -i 's/SystemdCgroup = false/SystemdCgroup = true/g' /etc/containerd/config.toml 
+      notify: Restart Containerd 
+
+    - name: Load br_netfilter module 
+      modprobe: 
+        name: br_netfilter 
+        state: present 
+
+    - name: Br netfilter loads on boot
+      copy:
+        dest: /etc/modules-load.d/k8s.conf
+        content: |
+          br_netfilter
+
+    - name: Set sysctl params for it 
+      copy: 
+        dest: /etc/sysctl.d/k8s.conf
+        content: |
+          net.bridge.bridge-nf-call-ip6tables = 1
+          net.bridge.bridge-nf-call-iptables = 1
+          net.ipv4.ip_forward = 1
+      
+    - name: Apply sysctl params
+      command: sysctl --system
+
+    - name: Install dependencies
+      apt: 
+        name: ['apt-transport-https', 'ca-certificates', 'curl', 'gnupg', 'lsb-release']
+        state: present 
+
+    - name: Create keyring dir
+      file: 
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Kubernetes GPG key
+      get_url: 
+        url: https://pkgs.k8s.io/core:/stable:/v1.29/deb/Release.key
+        dest: /etc/apt/keyrings/kubernetes-apt-keyring.asc
+
+    - name: Kubernetes repo 
+      apt_repository:
+        repo: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.asc] https://pkgs.k8s.io/core:/stable:/v1.29/deb/ /"
+        state: present
+
+    - name: Kubelet 
+      apt: 
+        name: 
+          - kubelet
+          - cri-tools 
+        state: present 
+        
+    - name: enable kubelet 
+      systemd: 
+        name: kubelet 
+        enabled: yes 
+        state: started 
+      ignore_errors: yes
+
+    - name: Configure Kubelet 
+      file: 
+        dest: /var/lib/kubelet/config.yaml
+        state: touch 
+        mode: '0644'
+
+    - name: Create kubelet config
+      copy: 
+        dest: /var/lib/kubelet/config.yaml
+        content: |
+          kind: KubeletConfiguration 
+          apiVersion: kubelet.config.k8s.io/v1beta1
+          cgroupDriver: systemd
+          staticPodPath: /etc/kubernetes/manifests
+
+    - name: Modify kubelet service 
+      copy:
+        dest: /etc/systemd/system/kubelet.service.d/10-kubeadm.conf
+        content: |
+          [Service]
+          Environment="KUBELET_EXTRA_ARGS=--config=/var/lib/kubelet/config.yaml"
+      notify: Restart Kubelet
+
+    - name: Restart Systemd
+      systemd: 
+        daemon_reload: yes
+        daemon_reexecute: yes
+      notify: Restart Kubelet
+
+    - name: Create dir 
+      file: 
+        dest: /etc/kubernetes/manifests
+        state: directory
+        mode: '0755'
+  
+    - name: Write Pod manifest
+      copy: 
+        dest: /etc/kubernetes/manifests/lab3.yaml
+        content: |
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: nginx-postgres-static
+          spec:
+            containers:
+            - name: nginx
+              image: nginx:latest
+              ports:
+              - containerPort: 80
+            - name: postgres
+              image: postgres:latest
+              env:
+              - name: POSTGRES_PASSWORD
+                value: "postgres1234"
+              ports:
+              - containerPort: 5432
+
+    - name: Restart Kubelet
+      systemd: 
+        name: kubelet 
+        state: restarted
+
+    - name: Check crictl
+      command: crictl ps
+
+    - name: Check crictl pods
+      command: crictl pods
+
+    - name: Test nginx pod 
+      command: crictl logs $(crictl ps -q --name=nginx)
+
+    
+
+  handlers:
+    - name: Restart Containerd
+      systemd:
+        name: containerd
+        state: restarted  
+
+    - name: Restart Kubelet
+      systemd:
+        name: kubelet
+        state: restarted
+
