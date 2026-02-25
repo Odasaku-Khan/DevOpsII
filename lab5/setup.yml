@@ -1,0 +1,191 @@
+- name: Setup Kubernetes 
+  hosts: all
+  become: yes 
+  tasks: 
+    - name: Wait to finish ubuntu init 
+      shell: cloud-init status --wait
+      args:
+        executable: /bin/bash
+    - name: Fix goddamn MiTM problem on mirror 
+      replace: 
+        path: /etc/apt/sources.list
+        regexp: 'http://ports.ubuntu.com' 
+        replace: 'https://ports.ubuntu.com'
+
+    - name: Update apt cache 
+      apt: 
+        update_cache: yes 
+
+    - name: Disable Swap
+      command: swapoff -a
+      when: ansible_swaptotal_mb > 0
+
+    - name: Make it permanent
+      replace: 
+        path: /etc/fstab
+        regexp: '^.*swap.*$'
+        replace: ''
+    
+    - name: Install Container 
+      apt:
+        name: containerd
+        state: present 
+
+    - name: Containerd config 
+      shell: | 
+        mkdir -p /etc/containerd 
+        containerd config default > /etc/containerd/config.toml 
+        sed -i "s/SystemdCgroup = false/SystemdCgroup = true/" /etc/containerd/config.toml
+      notify: Restart Containerd
+
+    - name: Intsall br_netfilter 
+      modprobe:
+        name: br_netfilter
+        state: present
+
+    - name: Make it Load on boot 
+      copy:
+        dest: /etc/modules-load.d/k8s.conf
+        content: |
+          br_netfilter
+
+    - name: Set sysctl params for Kubernetes
+      copy:
+        dest: /etc/sysctl.d/k8s.conf
+        content: |
+          net.bridge.bridge-nf-call-iptables = 1
+          net.ipv4.ip_forward = 1
+          net.bridge.bridge-nf-call-ip6tables = 1
+
+    - name: Apply sysctl params
+      command: sysctl --system
+
+
+    - name: Directory for keyring
+      file: 
+        path: /etc/apt/keyrings 
+        state: directory
+        mode: "0755"
+
+    - name: Install dependecies 
+      apt:
+        name: 
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gpg 
+        state: present    
+
+    - name: Install GPG keyring 
+      get_url:
+        url: https://pkgs.k8s.io/core:/stable:/v1.29/deb/Release.key
+        dest: /etc/apt/keyrings/kubernetes-apt-keyring.asc
+
+    - name: Add Kubernetes apt repository
+      apt_repository:
+        repo: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.asc] https://pkgs.k8s.io/core:/stable:/v1.29/deb/ /"
+        state: present
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Install kubeadm, kubelet and kubectl
+      apt:
+        name: 
+          - kubelet
+          - kubeadm 
+          - kubectl
+        state: present
+
+    - name: wait for download to finish
+      pause:
+        seconds: 40
+    
+    - name: Cluster init 
+      shell: kubeadm init --pod-network-cidr=192.168.0.0/16
+      when: "'master' in group_names"
+      args: 
+        creates: /etc/kubernetes/admin.conf
+
+    - name: Create .kube directory
+      shell: |
+        mkdir -p /root/.kube
+        cp -i /etc/kubernetes/admin.conf /root/.kube/config
+      when: "'master' in group_names"
+
+    - name: Install Calico network (CNI)
+      shell: kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.27.2/manifests/calico.yaml
+      when: "'master' in group_names"
+
+    - name: Allow scheduling on master node
+      shell: kubectl taint nodes --all node-role.kubernetes.io/control-plane-
+      when: "'master' in group_names"
+
+    - name: Install Nginx Ingress Controller
+      shell: 
+        kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/baremetal/deploy.yaml
+      when: "'master' in group_names"
+
+    - name: Wait for ingress controller
+      shell: |
+        kubectl wait --namespace ingress-nginx \
+        --for=condition=ready pod \
+        --selector=app.kubernetes.io/component=controller \
+        --timeout=300s
+      when: "'master' in group_names"
+      register: ingress_result
+      failed_when: 
+        - ingress_result.rc != 0
+        - "'error: no matching resources found' not in ingress_result.stderr"
+      changed_when: false
+
+    - name: Ensure keycloak namespace exists
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: keycloak
+        state: present
+      when: "'master' in group_names"
+
+    - name: Create Ingress for Keycloak 
+      copy:
+        dest: /tmp/keycloak-ingress.yaml
+        content: |
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: keycloak-ingress
+            namespace: keycloak
+            annotations:
+              nginx.ingress.kubernetes.io/rewrite-target: /
+          spec:
+            ingressClassName: nginx
+            rules:
+              - host: keycloak.local
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: keycloak
+                          port:
+                            number: 8080
+      when: "'master' in group_names"
+
+    - name: Apply Keycloak Ingress
+      shell: kubectl apply -f /tmp/keycloak-ingress.yaml
+      when: "'master' in group_names"
+
+    - name: Deploy Keycloak 
+      shell: kubectl apply -f https://raw.githubusercontent.com/keycloak/keycloak-quickstarts/main/kubernetes/keycloak.yaml -n keycloak
+      when: "'master' in group_names"
+
+
+
+  handlers:
+  - name: Restart Containerd
+    service:
+        name: containerd
+        state: restarted
