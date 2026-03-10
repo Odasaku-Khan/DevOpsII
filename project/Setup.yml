@@ -1,0 +1,935 @@
+---
+# ============================================================
+# PLAY 1: Load Balancer Setup (HAProxy + Keepalived)
+# ============================================================
+- name: Setup Load Balancer
+  hosts: lb
+  become: yes
+  tasks:
+    - name: Wait to become available
+      shell: cloud-init status --wait
+      args:
+        executable: /bin/bash
+
+    - name: Install HAProxy and Keepalived
+      apt:
+        name:
+          - haproxy
+          - keepalived
+          - curl
+        state: present
+        update_cache: yes
+
+    - name: Configure HAProxy for Kubernetes API load balancing
+      copy:
+        dest: /etc/haproxy/haproxy.cfg
+        content: |
+          global
+              maxconn 4096
+              log /dev/log local0
+              log /dev/log local1 notice
+              chroot /var/lib/haproxy
+              stats socket /run/haproxy/admin.sock mode 660 level admin expose-fd listeners
+              stats timeout 30s
+              user haproxy
+              group haproxy
+              ssl-default-bind-ciphers TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256
+              ssl-default-bind-options no-sslv3 no-tlsv10 no-tlsv11
+              daemon
+          defaults
+              log global
+              mode tcp
+              option tcplog
+              option dontlognull
+              timeout connect 10s
+              timeout client 1m
+              timeout server 1m
+          frontend kubernetes-api
+              bind *:6443
+              default_backend kubernetes-api-backend
+          backend kubernetes-api-backend
+              balance roundrobin
+              option tcp-check
+              server master  192.168.56.10:6443 check
+              server master1 192.168.56.11:6443 check
+              server master2 192.168.56.12:6443 check
+      notify: Restart HAProxy
+
+    - name: Ensure HAProxy is started and enabled
+      systemd:
+        name: haproxy
+        state: started
+        enabled: yes
+
+    - name: Configure Keepalived for VIP management
+      copy:
+        dest: /etc/keepalived/keepalived.conf
+        content: |
+          vrrp_instance VI_1 {
+              state MASTER
+              interface eth1
+              virtual_router_id 51
+              priority 100
+              advert_int 1
+              authentication {
+                  auth_type PASS
+                  auth_pass 42
+              }
+              virtual_ipaddress {
+                  192.168.56.5
+              }
+          }
+      notify: Restart Keepalived
+
+    - name: Ensure Keepalived is started and enabled
+      systemd:
+        name: keepalived
+        state: started
+        enabled: yes
+
+  handlers:
+    - name: Restart HAProxy
+      systemd:
+        name: haproxy
+        state: restarted
+    - name: Restart Keepalived
+      systemd:
+        name: keepalived
+        state: restarted
+
+
+# ============================================================
+# PLAY 2: Common Kubernetes Prerequisites (all master nodes)
+# ============================================================
+- name: Common Kubernetes Setup
+  hosts: master, master1, master2
+  become: yes
+  tasks:
+    - name: Wait to become available
+      shell: cloud-init status --wait
+      args:
+        executable: /bin/bash
+
+    - name: Install ca-certificates
+      apt:
+        name: ca-certificates
+        state: present
+
+    - name: Fix apt source to use HTTPS (MitM workaround)
+      replace:
+        path: /etc/apt/sources.list
+        regexp: 'http://ports.ubuntu.com'
+        replace: 'https://ports.ubuntu.com'
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Disable swap
+      shell: |
+        if swapon --summary | grep -q '^'; then
+          swapoff -a
+        fi
+
+    - name: Permanently disable swap in fstab
+      replace:
+        path: /etc/fstab
+        regexp: '^([^#].*?\sswap\s+.*)$'
+        replace: '# \1'
+
+    - name: Install dependencies
+      apt:
+        name:
+          - apt-transport-https
+          - curl
+          - gnupg
+          - lsb-release
+        state: present
+
+    - name: Install ContainerD
+      apt:
+        name: containerd
+        state: present
+
+    - name: Configure ContainerD with SystemdCgroup and correct sandbox image
+      shell: |
+        mkdir -p /etc/containerd
+        containerd config default > /etc/containerd/config.toml
+        sed -i "s/SystemdCgroup = false/SystemdCgroup = true/g" /etc/containerd/config.toml
+        sed -i 's|registry.k8s.io/pause:3.8|registry.k8s.io/pause:3.10.1|g' /etc/containerd/config.toml
+      notify: Restart ContainerD
+
+    - name: Load br_netfilter module
+      modprobe:
+        name: br_netfilter
+        state: present
+
+    - name: Persist br_netfilter on boot
+      copy:
+        dest: /etc/modules-load.d/k8s.conf
+        content: |
+          br_netfilter
+          overlay
+
+    - name: Set sysctl params for Kubernetes
+      copy:
+        dest: /etc/sysctl.d/k8s.conf
+        content: |
+          net.bridge.bridge-nf-call-ip6tables = 1
+          net.bridge.bridge-nf-call-iptables = 1
+          net.ipv4.ip_forward = 1
+      notify: Reload sysctl
+
+    - name: Apply sysctl params immediately
+      command: sysctl --system
+
+    - name: Force Google DNS
+      lineinfile:
+        path: /etc/resolv.conf
+        line: "nameserver 8.8.8.8"
+        insertbefore: BOF
+
+    - name: Create apt keyrings directory
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Add Kubernetes GPG key
+      shell: |
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.35/deb/Release.key | \
+          gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+      args:
+        creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+    - name: Add Kubernetes apt repository
+      copy:
+        dest: /etc/apt/sources.list.d/kubernetes.list
+        content: 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.35/deb/ /'
+
+    - name: Update apt cache after adding Kubernetes repo
+      apt:
+        update_cache: yes
+
+    - name: Install kubeadm, kubelet, kubectl
+      apt:
+        name:
+          - kubeadm
+          - kubelet
+          - kubectl
+        state: present
+
+    - name: Hold Kubernetes packages at current version
+      dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop: [kubeadm, kubelet, kubectl]
+
+  handlers:
+    - name: Restart ContainerD
+      systemd:
+        name: containerd
+        state: restarted
+    - name: Reload sysctl
+      command: sysctl --system
+
+
+# ============================================================
+# PLAY 3: Initialize Primary Control Plane
+# ============================================================
+- name: Initialize Primary Master Node
+  hosts: master
+  become: yes
+  tasks:
+    - name: Pre-pull kubeadm images
+      command: kubeadm config images pull
+
+    - name: Generate certificate key for HA join
+      command: kubeadm certs certificate-key
+      register: register_cert_key_result
+
+    - name: Write kubeadm init config
+      copy:
+        dest: /tmp/kubeadm-init.yaml
+        content: |
+          apiVersion: kubeadm.k8s.io/v1beta4
+          kind: InitConfiguration
+          localAPIEndpoint:
+            advertiseAddress: "192.168.56.10"
+            bindPort: 6443
+          certificateKey: "{{ register_cert_key_result.stdout }}"
+          nodeRegistration:
+            kubeletExtraArgs:
+              - name: node-ip
+                value: "192.168.56.10"
+          ---
+          apiVersion: kubeadm.k8s.io/v1beta4
+          kind: ClusterConfiguration
+          controlPlaneEndpoint: "192.168.56.5:6443"
+          networking:
+            podSubnet: "192.168.0.0/16"
+          ---
+          apiVersion: kubelet.config.k8s.io/v1beta1
+          kind: KubeletConfiguration
+          cgroupDriver: systemd
+
+    - name: Initialize cluster with kubeadm
+      command: kubeadm init --config /tmp/kubeadm-init.yaml --upload-certs
+      args:
+        creates: /etc/kubernetes/admin.conf
+
+    - name: Create .kube directory for root
+      file:
+        path: /root/.kube
+        state: directory
+        mode: '0700'
+
+    - name: Copy admin kubeconfig for root
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /root/.kube/config
+        remote_src: yes
+        mode: '0600'
+
+    - name: Setup kubeconfig for vagrant user
+      shell: |
+        mkdir -p /home/vagrant/.kube
+        cp /etc/kubernetes/admin.conf /home/vagrant/.kube/config
+        chown vagrant:vagrant /home/vagrant/.kube/config
+
+    - name: Remove control-plane taint to allow scheduling
+      shell: kubectl taint nodes --all node-role.kubernetes.io/control-plane- || true
+
+    - name: Get join command
+      command: kubeadm token create --print-join-command
+      register: register_join_result
+
+
+# ============================================================
+# PLAY 4: Join Additional Control Plane Nodes
+# ============================================================
+- name: Join Additional Master Nodes to Cluster
+  hosts: master1, master2
+  become: yes
+  serial: 1
+  tasks:
+    - name: Pre-pull control plane images
+      command: kubeadm config images pull
+
+    - name: Get this node's private IP
+      set_fact:
+        node_private_ip: "{{ ansible_all_ipv4_addresses | select('match', '^192\\.168\\.56\\.') | first }}"
+
+    - name: Parse join token from join command
+      set_fact:
+        join_token: "{{ hostvars['master']['register_join_result']['stdout'] | regex_search('--token ([^ ]+)', '\\1') | first }}"
+        join_ca_hash: "{{ hostvars['master']['register_join_result']['stdout'] | regex_search('--discovery-token-ca-cert-hash ([^ ]+)', '\\1') | first }}"
+
+    - name: Write kubeadm join config file
+      copy:
+        dest: /tmp/kubeadm-join.yaml
+        content: |
+          apiVersion: kubeadm.k8s.io/v1beta4
+          kind: JoinConfiguration
+          discovery:
+            bootstrapToken:
+              apiServerEndpoint: "192.168.56.5:6443"
+              token: "{{ join_token }}"
+              caCertHashes:
+                - "{{ join_ca_hash }}"
+          controlPlane:
+            localAPIEndpoint:
+              advertiseAddress: "{{ node_private_ip }}"
+              bindPort: 6443
+            certificateKey: "{{ hostvars['master']['register_cert_key_result']['stdout'] }}"
+          nodeRegistration:
+            kubeletExtraArgs:
+              - name: node-ip
+                value: "{{ node_private_ip }}"
+          ---
+          apiVersion: kubelet.config.k8s.io/v1beta1
+          kind: KubeletConfiguration
+          cgroupDriver: systemd
+
+    - name: Execute HA control-plane join via config file
+      command: kubeadm join --config /tmp/kubeadm-join.yaml
+      args:
+        creates: /etc/kubernetes/admin.conf
+
+    - name: Wait for kubelet to be active
+      shell: systemctl is-active kubelet
+      register: kubelet_status
+      until: kubelet_status.stdout == "active"
+      retries: 20
+      delay: 5
+
+    - name: Wait for local etcd to be healthy
+      shell: |
+        for i in $(seq 1 40); do
+          result=$(curl -sk https://127.0.0.1:2379/health \
+            --cert /etc/kubernetes/pki/etcd/peer.crt \
+            --key /etc/kubernetes/pki/etcd/peer.key \
+            --cacert /etc/kubernetes/pki/etcd/ca.crt 2>/dev/null)
+          if echo "$result" | grep -q '"health":"true"'; then
+            echo "etcd is healthy"
+            exit 0
+          fi
+          echo "Attempt $i: etcd not ready yet, waiting..."
+          sleep 6
+        done
+        echo "etcd never became healthy"
+        exit 1
+
+    - name: Setup kubeconfig for vagrant user
+      shell: |
+        mkdir -p /home/vagrant/.kube
+        cp /etc/kubernetes/admin.conf /home/vagrant/.kube/config
+        chown vagrant:vagrant /home/vagrant/.kube/config
+
+
+# ============================================================
+# PLAY 5: Install CNI and Verify Cluster
+# ============================================================
+- name: Install CNI and Verify Cluster
+  hosts: master
+  become: yes
+  tasks:
+    - name: Install Calico CNI
+      shell: |
+        curl -fsSL https://raw.githubusercontent.com/projectcalico/calico/v3.31.4/manifests/calico.yaml \
+          -o /tmp/calico.yaml
+        kubectl apply -f /tmp/calico.yaml
+      register: calico_result
+      changed_when: "'created' in calico_result.stdout or 'configured' in calico_result.stdout"
+
+    - name: Fix Calico IP autodetection (use first-found, not eth1)
+      shell: |
+        kubectl set env daemonset/calico-node -n kube-system \
+          IP=autodetect \
+          IP_AUTODETECTION_METHOD=first-found
+
+    - name: Wait for Calico nodes to be Running
+      shell: |
+        for i in $(seq 1 30); do
+          READY=$(kubectl get pods -n kube-system -l k8s-app=calico-node \
+            --no-headers | grep -c "Running" || true)
+          TOTAL=$(kubectl get pods -n kube-system -l k8s-app=calico-node \
+            --no-headers | wc -l)
+          echo "Calico nodes ready: $READY/$TOTAL"
+          if [ "$READY" -eq "$TOTAL" ] && [ "$TOTAL" -gt 0 ]; then
+            exit 0
+          fi
+          sleep 10
+        done
+        exit 1
+
+    - name: Wait for all nodes to be Ready
+      command: kubectl wait --for=condition=Ready nodes --all --timeout=300s
+
+    - name: Display cluster nodes
+      command: kubectl get nodes -o wide
+      register: get_nodes_result
+
+    - name: Show nodes
+      debug:
+        msg: "{{ get_nodes_result.stdout_lines }}"
+
+
+# ============================================================
+# PLAY 6: Install Infrastructure Components
+# ============================================================
+- name: Install Infrastructure Components
+  hosts: master
+  become: yes
+  tasks:
+    - name: Install Nginx Ingress Controller
+      command: kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/baremetal/deploy.yaml
+
+    - name: Wait for ingress-nginx controller to be ready
+      shell: |
+        kubectl wait --namespace ingress-nginx \
+          --for=condition=ready pod \
+          --selector=app.kubernetes.io/component=controller \
+          --timeout=300s
+      ignore_errors: yes
+
+    - name: Delete ingress-nginx admission webhook to avoid race condition
+      shell: |
+        kubectl delete validatingwebhookconfiguration ingress-nginx-admission \
+          --ignore-not-found=true
+
+    - name: Install Local Path Provisioner
+      command: kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/master/deploy/local-path-storage.yaml
+
+    - name: Set local-path as default storage class
+      shell: |
+        kubectl patch storageclass local-path \
+          -p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+
+    - name: Install Helm
+      shell: |
+        curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      args:
+        creates: /usr/local/bin/helm
+
+    - name: Add all required Helm repos
+      shell: |
+        helm repo add bitnami https://charts.bitnami.com/bitnami || true
+        helm repo add prometheus-community https://prometheus-community.github.io/helm-charts || true
+        helm repo add grafana https://grafana.github.io/helm-charts || true
+        helm repo update
+
+    - name: Create argocd namespace
+      shell: kubectl get ns argocd || kubectl create ns argocd
+      changed_when: false
+
+    - name: Install ArgoCD
+      command: >
+        kubectl apply -n argocd
+        -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+        --server-side
+
+    - name: Wait for ArgoCD server to be ready
+      shell: |
+        kubectl wait --for=condition=available deployment/argocd-server \
+          -n argocd --timeout=300s
+      ignore_errors: yes
+
+    - name: Expose ArgoCD via NodePort
+      shell: |
+        kubectl patch svc argocd-server -n argocd \
+          -p '{"spec": {"type": "NodePort"}}'
+
+    - name: Get ArgoCD admin password
+      shell: |
+        kubectl -n argocd get secret argocd-initial-admin-secret \
+          -o jsonpath="{.data.password}" | base64 -d
+      register: argocd_admin_password
+
+    - name: Display ArgoCD admin password
+      debug:
+        msg: "ArgoCD admin password: {{ argocd_admin_password.stdout }}"
+
+    - name: Create keycloak namespace
+      shell: kubectl get ns keycloak || kubectl create ns keycloak
+      changed_when: false
+
+    - name: Install Keycloak using Helm
+      shell: |
+        helm upgrade --install keycloak oci://registry-1.docker.io/bitnamicharts/keycloak \
+          --namespace keycloak --create-namespace \
+          --set global.defaultStorageClass=local-path \
+          --set auth.adminUser=admin \
+          --set auth.adminPassword=password123 \
+          --set postgresql.enabled=true \
+          --set service.type=NodePort
+
+    - name: Install Prometheus
+      shell: |
+        helm upgrade --install prometheus prometheus-community/prometheus \
+          --namespace monitoring --create-namespace \
+          --set server.persistentVolume.enabled=true \
+          --set server.persistentVolume.storageClass=local-path
+
+    - name: Install Grafana
+      shell: |
+        helm upgrade --install grafana grafana/grafana \
+          --namespace monitoring \
+          --set persistence.enabled=true \
+          --set persistence.storageClass=local-path \
+          --set adminPassword=admin \
+          --set service.type=NodePort
+
+    - name: Get Grafana admin password
+      shell: |
+        kubectl get secret --namespace monitoring grafana \
+          -o jsonpath="{.data.admin-password}" | base64 -d
+      register: grafana_password
+
+    - name: Display Grafana admin password
+      debug:
+        msg: "Grafana admin password: {{ grafana_password.stdout }}"
+
+
+# ============================================================
+# PLAY 7: Deploy Applications
+# ============================================================
+- name: Deploy Applications
+  hosts: master
+  become: yes
+  tasks:
+    - name: Create demo namespace
+      shell: kubectl get ns demo || kubectl create ns demo
+      changed_when: false
+
+    # ---- App 1: DevOps Excuse Generator ----
+    - name: Deploy Excuse Generator
+      shell: |
+        kubectl apply -f - <<'EOF'
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: excuse-generator
+          namespace: demo
+          labels:
+            app: excuse-generator
+        spec:
+          replicas: 2
+          selector:
+            matchLabels:
+              app: excuse-generator
+          template:
+            metadata:
+              labels:
+                app: excuse-generator
+            spec:
+              containers:
+              - name: excuse-generator
+                image: hashicorp/http-echo
+                args:
+                  - "-text=DevOps Excuse: It works on my machine!"
+                  - "-listen=:8080"
+                ports:
+                - containerPort: 8080
+                resources:
+                  requests:
+                    cpu: 50m
+                    memory: 32Mi
+                  limits:
+                    cpu: 100m
+                    memory: 64Mi
+                livenessProbe:
+                  httpGet:
+                    path: /
+                    port: 8080
+                  initialDelaySeconds: 5
+                  periodSeconds: 10
+                readinessProbe:
+                  httpGet:
+                    path: /
+                    port: 8080
+                  initialDelaySeconds: 3
+                  periodSeconds: 5
+                securityContext:
+                  allowPrivilegeEscalation: false
+        EOF
+
+    - name: Create Excuse Generator Service
+      shell: |
+        kubectl apply -f - <<'EOF'
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: excuse-generator
+          namespace: demo
+        spec:
+          selector:
+            app: excuse-generator
+          ports:
+            - port: 80
+              targetPort: 8080
+        EOF
+
+    # ---- App 2: Nginx (second app for inter-pod communication demo) ----
+    - name: Deploy Nginx app
+      shell: |
+        kubectl apply -f - <<'EOF'
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: nginx-app
+          namespace: demo
+          labels:
+            app: nginx-app
+        spec:
+          replicas: 2
+          selector:
+            matchLabels:
+              app: nginx-app
+          template:
+            metadata:
+              labels:
+                app: nginx-app
+            spec:
+              containers:
+              - name: nginx
+                image: nginx:alpine
+                ports:
+                - containerPort: 80
+                resources:
+                  requests:
+                    cpu: 50m
+                    memory: 32Mi
+                  limits:
+                    cpu: 100m
+                    memory: 64Mi
+                livenessProbe:
+                  httpGet:
+                    path: /
+                    port: 80
+                  initialDelaySeconds: 5
+                  periodSeconds: 10
+                readinessProbe:
+                  httpGet:
+                    path: /
+                    port: 80
+                  initialDelaySeconds: 3
+                  periodSeconds: 5
+                securityContext:
+                  allowPrivilegeEscalation: false
+        EOF
+
+    - name: Create Nginx Service
+      shell: |
+        kubectl apply -f - <<'EOF'
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: nginx-app
+          namespace: demo
+        spec:
+          selector:
+            app: nginx-app
+          ports:
+            - port: 80
+              targetPort: 80
+        EOF
+
+    # ---- NetworkPolicies (TARGET grade requirement) ----
+    - name: Apply default deny-all NetworkPolicy for demo namespace
+      shell: |
+        kubectl apply -f - <<'EOF'
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        metadata:
+          name: default-deny-all
+          namespace: demo
+        spec:
+          podSelector: {}
+          policyTypes:
+            - Ingress
+            - Egress
+        EOF
+
+    - name: Allow ingress to excuse-generator from nginx-ingress
+      shell: |
+        kubectl apply -f - <<'EOF'
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        metadata:
+          name: allow-ingress-to-excuse-generator
+          namespace: demo
+        spec:
+          podSelector:
+            matchLabels:
+              app: excuse-generator
+          policyTypes:
+            - Ingress
+          ingress:
+            - from:
+                - namespaceSelector:
+                    matchLabels:
+                      kubernetes.io/metadata.name: ingress-nginx
+              ports:
+                - protocol: TCP
+                  port: 8080
+        EOF
+
+    - name: Allow ingress to nginx-app from ingress controller
+      shell: |
+        kubectl apply -f - <<'EOF'
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        metadata:
+          name: allow-ingress-to-nginx-app
+          namespace: demo
+        spec:
+          podSelector:
+            matchLabels:
+              app: nginx-app
+          policyTypes:
+            - Ingress
+          ingress:
+            - from:
+                - namespaceSelector:
+                    matchLabels:
+                      kubernetes.io/metadata.name: ingress-nginx
+              ports:
+                - protocol: TCP
+                  port: 80
+        EOF
+
+    - name: Allow nginx-app to call excuse-generator (inter-pod comm)
+      shell: |
+        kubectl apply -f - <<'EOF'
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        metadata:
+          name: allow-nginx-to-excuse
+          namespace: demo
+        spec:
+          podSelector:
+            matchLabels:
+              app: excuse-generator
+          policyTypes:
+            - Ingress
+          ingress:
+            - from:
+                - podSelector:
+                    matchLabels:
+                      app: nginx-app
+              ports:
+                - protocol: TCP
+                  port: 8080
+        EOF
+
+    - name: Allow DNS egress for all demo pods
+      shell: |
+        kubectl apply -f - <<'EOF'
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        metadata:
+          name: allow-dns-egress
+          namespace: demo
+        spec:
+          podSelector: {}
+          policyTypes:
+            - Egress
+          egress:
+            - ports:
+                - protocol: UDP
+                  port: 53
+                - protocol: TCP
+                  port: 53
+        EOF
+
+    - name: Allow excuse-generator egress (needs outbound for HTTP)
+      shell: |
+        kubectl apply -f - <<'EOF'
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        metadata:
+          name: allow-excuse-egress
+          namespace: demo
+        spec:
+          podSelector:
+            matchLabels:
+              app: excuse-generator
+          policyTypes:
+            - Egress
+          egress:
+            - ports:
+                - protocol: TCP
+                  port: 80
+                - protocol: TCP
+                  port: 443
+        EOF
+
+    # ---- TLS Certificate ----
+    - name: Generate self-signed TLS certificate
+      shell: |
+        openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+          -keyout /tmp/tls.key \
+          -out /tmp/tls.crt \
+          -subj "/CN=excuses.local/O=demo" \
+          -addext "subjectAltName=DNS:excuses.local,DNS:nginx.local"
+      args:
+        creates: /tmp/tls.crt
+
+    - name: Create TLS secret
+      shell: |
+        kubectl get secret excuses-tls -n demo 2>/dev/null || \
+        kubectl create secret tls excuses-tls \
+          --cert=/tmp/tls.crt \
+          --key=/tmp/tls.key \
+          -n demo
+
+    # ---- Ingress with TLS ----
+    - name: Create Ingress for excuse-generator with TLS
+      shell: |
+        kubectl apply -f - <<'EOF'
+        apiVersion: networking.k8s.io/v1
+        kind: Ingress
+        metadata:
+          name: excuses
+          namespace: demo
+          annotations:
+            nginx.ingress.kubernetes.io/ssl-redirect: "true"
+            nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+        spec:
+          ingressClassName: nginx
+          tls:
+            - hosts:
+                - excuses.local
+              secretName: excuses-tls
+          rules:
+            - host: excuses.local
+              http:
+                paths:
+                  - path: /
+                    pathType: Prefix
+                    backend:
+                      service:
+                        name: excuse-generator
+                        port:
+                          number: 80
+        EOF
+
+    - name: Create Ingress for nginx-app with TLS
+      shell: |
+        kubectl apply -f - <<'EOF'
+        apiVersion: networking.k8s.io/v1
+        kind: Ingress
+        metadata:
+          name: nginx-ingress
+          namespace: demo
+          annotations:
+            nginx.ingress.kubernetes.io/ssl-redirect: "true"
+        spec:
+          ingressClassName: nginx
+          tls:
+            - hosts:
+                - nginx.local
+              secretName: excuses-tls
+          rules:
+            - host: nginx.local
+              http:
+                paths:
+                  - path: /
+                    pathType: Prefix
+                    backend:
+                      service:
+                        name: nginx-app
+                        port:
+                          number: 80
+        EOF
+
+    - name: Wait for deployments to be ready
+      shell: |
+        kubectl wait --for=condition=available deployment/excuse-generator -n demo --timeout=120s
+        kubectl wait --for=condition=available deployment/nginx-app -n demo --timeout=120s
+      ignore_errors: yes
+
+    - name: Show all demo resources
+      shell: |
+        echo "=== PODS ==="
+        kubectl get pods -n demo -o wide
+        echo "=== SERVICES ==="
+        kubectl get svc -n demo
+        echo "=== INGRESS ==="
+        kubectl get ingress -n demo
+        echo "=== NETWORK POLICIES ==="
+        kubectl get networkpolicy -n demo
+      register: demo_resources
+
+    - name: Display demo resources
+      debug:
+        msg: "{{ demo_resources.stdout_lines }}"
+
+    - name: Show access info
+      debug:
+        msg:
+          - "Add to /etc/hosts on your Mac:"
+          - "192.168.56.10  excuses.local nginx.local"
+          - "Then access: https://excuses.local (via NodePort or after port-forwarding)"
+          - "Ingress NodePort: kubectl get svc -n ingress-nginx"

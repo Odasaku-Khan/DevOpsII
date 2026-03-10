@@ -9,3 +9,6 @@ terraform.json
 # SSH
 *.pem
 *.key
+
+# Vagrant
+.vagrant/

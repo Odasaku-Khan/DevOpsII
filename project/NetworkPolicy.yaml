@@ -1,0 +1,647 @@
+- name: Apply Network Policies for All Components
+  hosts: master
+  become: yes
+  tasks:
+    - name: Create Network Policies for all namespaces
+      copy:
+        dest: /tmp/complete-network-policies.yaml
+        content: |
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: deny-all
+            namespace: argocd
+          spec:
+            podSelector: {}
+            policyTypes:
+            - Ingress
+            - Egress
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: deny-all
+            namespace: monitoring
+          spec:
+            podSelector: {}
+            policyTypes:
+            - Ingress
+            - Egress
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: deny-all
+            namespace: keycloak
+          spec:
+            podSelector: {}
+            policyTypes:
+            - Ingress
+            - Egress
+            ingress:
+            - from:
+              - podSelector: {}
+            egress:
+            - to:
+              - podSelector: {}
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: deny-all
+            namespace: ingress-nginx
+          spec:
+            podSelector: {}
+            policyTypes:
+            - Ingress
+            - Egress
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: deny-all
+            namespace: default
+          spec:
+            podSelector: {}
+            policyTypes:
+            - Ingress
+            - Egress
+          
+          ---
+          # DNS policies for all namespaces
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-dns
+            namespace: argocd
+          spec:
+            podSelector: {}
+            policyTypes:
+            - Egress
+            egress:
+            - to:
+              - namespaceSelector: {}
+                podSelector:
+                  matchLabels:
+                    k8s-app: kube-dns
+              ports:
+              - protocol: UDP
+                port: 53
+              - protocol: TCP
+                port: 53
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-dns
+            namespace: monitoring
+          spec:
+            podSelector: {}
+            policyTypes:
+            - Egress
+            egress:
+            - to:
+              - namespaceSelector: {}
+                podSelector:
+                  matchLabels:
+                    k8s-app: kube-dns
+              ports:
+              - protocol: UDP
+                port: 53
+              - protocol: TCP
+                port: 53
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-dns
+            namespace: ingress-nginx
+          spec:
+            podSelector: {}
+            policyTypes:
+            - Egress
+            egress:
+            - to:
+              - namespaceSelector: {}
+                podSelector:
+                  matchLabels:
+                    k8s-app: kube-dns
+              ports:
+              - protocol: UDP
+                port: 53
+              - protocol: TCP
+                port: 53
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-dns
+            namespace: default
+          spec:
+            podSelector: {}
+            policyTypes:
+            - Egress
+            egress:
+            - to:
+              - namespaceSelector: {}
+                podSelector:
+                  matchLabels:
+                    k8s-app: kube-dns
+              ports:
+              - protocol: UDP
+                port: 53
+              - protocol: TCP
+                port: 53
+          
+          ---
+          # ArgoCD Network Policies
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-argocd-server-ingress
+            namespace: argocd
+          spec:
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/name: argocd-server
+            policyTypes:
+            - Ingress
+            ingress:
+            - from:
+              - namespaceSelector:
+                  matchLabels:
+                    kubernetes.io/metadata.name: ingress-nginx
+              ports:
+              - protocol: TCP
+                port: 8080
+              - protocol: TCP
+                port: 443
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-argocd-repo-server
+            namespace: argocd
+          spec:
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/name: argocd-repo-server
+            policyTypes:
+            - Ingress
+            ingress:
+            - from:
+              - podSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: argocd-server
+              - podSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: argocd-application-controller
+              ports:
+              - protocol: TCP
+                port: 8081
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-argocd-redis
+            namespace: argocd
+          spec:
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/name: argocd-redis
+            policyTypes:
+            - Ingress
+            ingress:
+            - from:
+              - podSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: argocd-server
+              - podSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: argocd-repo-server
+              - podSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: argocd-application-controller
+              ports:
+              - protocol: TCP
+                port: 6379
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-argocd-egress-to-git
+            namespace: argocd
+          spec:
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/name: argocd-repo-server
+            policyTypes:
+            - Egress
+            egress:
+            - to:
+              - ipBlock:
+                  cidr: 0.0.0.0/0
+                  except:
+                  - 10.0.0.0/8
+                  - 172.16.0.0/12
+                  - 192.168.0.0/16
+              ports:
+              - protocol: TCP
+                port: 22
+              - protocol: TCP
+                port: 80
+              - protocol: TCP
+                port: 443
+              - protocol: TCP
+                port: 9418
+          
+          ---
+          # Monitoring Stack Network Policies
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-prometheus-ingress
+            namespace: monitoring
+          spec:
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/name: prometheus
+            policyTypes:
+            - Ingress
+            ingress:
+            - from:
+              - podSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: grafana
+              - namespaceSelector:
+                  matchLabels:
+                    kubernetes.io/metadata.name: argocd
+              ports:
+              - protocol: TCP
+                port: 9090
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-grafana-ingress
+            namespace: monitoring
+          spec:
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/name: grafana
+            policyTypes:
+            - Ingress
+            ingress:
+            - from:
+              - namespaceSelector:
+                  matchLabels:
+                    kubernetes.io/metadata.name: ingress-nginx
+              ports:
+              - protocol: TCP
+                port: 3000
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-prometheus-to-targets
+            namespace: monitoring
+          spec:
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/name: prometheus
+            policyTypes:
+            - Egress
+            egress:
+            - to:
+              - namespaceSelector: {}
+                podSelector: {}
+              ports:
+              - protocol: TCP
+                port: 8080
+              - protocol: TCP
+                port: 8443
+              - protocol: TCP
+                port: 9100
+              - protocol: TCP
+                port: 9113
+              - protocol: TCP
+                port: 9153
+              - protocol: TCP
+                port: 10250
+              - protocol: TCP
+                port: 10255
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-excuse-ingress 
+            namespace: demo 
+          spec:
+            podSelector:
+              matchLabels:
+                app: excuse-generator
+            policyTypes:
+            - Ingress
+            ingress:
+            - from:
+              - namespaceSelector:
+                  matchLabels:
+                    kubernetes.io/metadata.name: ingress-nginx
+              ports:
+              - protocol: TCP
+                port: 8080
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-grafana-to-prometheus
+            namespace: monitoring
+          spec:
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/name: grafana
+            policyTypes:
+            - Egress
+            egress:
+            - to:
+              - podSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: prometheus
+              ports:
+              - protocol: TCP
+                port: 9090
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-alertmanager
+            namespace: monitoring
+          spec:
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/name: alertmanager
+            policyTypes:
+            - Ingress
+            ingress:
+            - from:
+              - podSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: prometheus
+              ports:
+              - protocol: TCP
+                port: 9093
+              - protocol: TCP
+                port: 9094
+          
+          ---
+          # Ingress Controller Network Policies
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-ingress-controller
+            namespace: ingress-nginx
+          spec:
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/name: ingress-nginx
+            policyTypes:
+            - Ingress
+            ingress:
+            - from:
+              - ipBlock:
+                  cidr: 0.0.0.0/0
+              ports:
+              - protocol: TCP
+                port: 80
+              - protocol: TCP
+                port: 443
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-ingress-egress-to-services
+            namespace: ingress-nginx
+          spec:
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/name: ingress-nginx
+            policyTypes:
+            - Egress
+            egress:
+            - to:
+              - namespaceSelector: {}
+                podSelector: {}
+              ports:
+              - protocol: TCP
+                port: 80
+              - protocol: TCP
+                port: 443
+              - protocol: TCP
+                port: 8080
+              - protocol: TCP
+                port: 8443
+          
+          ---
+          # Default namespace policies for sample applications
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-app-ingress
+            namespace: default
+          spec:
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/component: application
+            policyTypes:
+            - Ingress
+            ingress:
+            - from:
+              - namespaceSelector:
+                  matchLabels:
+                    kubernetes.io/metadata.name: ingress-nginx
+              ports:
+              - protocol: TCP
+                port: 80
+              - protocol: TCP
+                port: 8080
+              - protocol: TCP
+                port: 8443
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-app-to-keycloak
+            namespace: default
+          spec:
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/component: application
+            policyTypes:
+            - Egress
+            egress:
+            - to:
+              - namespaceSelector:
+                  matchLabels:
+                    kubernetes.io/metadata.name: keycloak
+                podSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: keycloak
+              ports:
+              - protocol: TCP
+                port: 8080
+              - protocol: TCP
+                port: 8443
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-app-to-db
+            namespace: default
+          spec:
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/component: application
+            policyTypes:
+            - Egress
+            egress:
+            - to:
+              - namespaceSelector:
+                  matchLabels:
+                    kubernetes.io/metadata.name: default
+                podSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: postgresql
+              ports:
+              - protocol: TCP
+                port: 5432
+            - to:
+              - namespaceSelector:
+                  matchLabels:
+                    kubernetes.io/metadata.name: default
+                podSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: mysql
+              ports:
+              - protocol: TCP
+                port: 3306
+          
+          ---
+          # API Server access policies (for kubelet, etc.)
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-kube-apiserver
+            namespace: default
+          spec:
+            podSelector: {}
+            policyTypes:
+            - Egress
+            egress:
+            - to:
+              - ipBlock:
+                  cidr: 192.168.56.5/32
+              ports:
+              - protocol: TCP
+                port: 6443
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-kube-apiserver
+            namespace: argocd
+          spec:
+            podSelector: {}
+            policyTypes:
+            - Egress
+            egress:
+            - to:
+              - ipBlock:
+                  cidr: 192.168.56.5/32
+              ports:
+              - protocol: TCP
+                port: 6443
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-kube-apiserver
+            namespace: keycloak
+          spec:
+            podSelector: {}
+            policyTypes:
+            - Egress
+            egress:
+            - to:
+              - ipBlock:
+                  cidr: 192.168.56.5/32
+              ports:
+              - protocol: TCP
+                port: 6443
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-kube-apiserver
+            namespace: monitoring
+          spec:
+            podSelector: {}
+            policyTypes:
+            - Egress
+            egress:
+            - to:
+              - ipBlock:
+                  cidr: 192.168.56.5/32
+              ports:
+              - protocol: TCP
+                port: 6443
+          
+          ---
+          # Cross-namespace communication policies
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-argocd-to-monitoring
+            namespace: argocd
+          spec:
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/name: argocd-server
+            policyTypes:
+            - Egress
+            egress:
+            - to:
+              - namespaceSelector:
+                  matchLabels:
+                    kubernetes.io/metadata.name: monitoring
+                podSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: grafana
+              ports:
+              - protocol: TCP
+                port: 3000
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-monitoring-to-argocd
+            namespace: monitoring
+          spec:
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/name: prometheus
+            policyTypes:
+            - Egress
+            egress:
+            - to:
+              - namespaceSelector:
+                  matchLabels:
+                    kubernetes.io/metadata.name: argocd
+                podSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: argocd-server
+              ports:
+              - protocol: TCP
+                port: 8080
+
+    - name: Apply all network policies
+      command: kubectl apply -f /tmp/complete-network-policies.yaml

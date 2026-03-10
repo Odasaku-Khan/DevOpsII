@@ -1,0 +1,136 @@
+# Please edit the object below. Lines beginning with a '#' will be ignored,
+# and an empty file will abort the edit. If an error occurs while saving this file will be
+# reopened with the relevant failures.
+#
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  creationTimestamp: "2026-02-25T23:08:00Z"
+  generation: 2
+  labels:
+    app: keycloak
+  name: keycloak
+  namespace: default
+  resourceVersion: "19551"
+  uid: b5bbbdc3-c3a4-40c2-b749-52265196665a
+spec:
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  podManagementPolicy: OrderedReady
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: keycloak
+  serviceName: keycloak-discovery
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        app: keycloak
+    spec:
+      containers:
+      - args:
+        - start
+        env:
+        - name: KC_BOOTSTRAP_ADMIN_USERNAME
+          value: admin
+        - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+          value: admin
+        - name: KC_PROXY_HEADERS
+          value: xforwarded
+        - name: KC_HTTP_ENABLED
+          value: "true"
+        - name: KC_HOSTNAME_STRICT
+          value: "false"
+        - name: KC_HEALTH_ENABLED
+          value: "true"
+        - name: KC_CACHE
+          value: ispn
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: status.podIP
+        - name: KC_CACHE_EMBEDDED_NETWORK_BIND_ADDRESS
+          value: $(POD_IP)
+        - name: KC_DB_URL_DATABASE
+          value: keycloak
+        - name: KC_DB_URL_HOST
+          value: postgres
+        - name: KC_DB
+          value: postgres
+        - name: KC_DB_PASSWORD
+          value: keycloak
+        - name: KC_DB_USERNAME
+          value: keycloak
+        image: quay.io/keycloak/keycloak:26.5.4
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /health/live
+            port: 9000
+            scheme: HTTP
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 1
+        name: keycloak
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        - containerPort: 7800
+          name: jgroups
+          protocol: TCP
+        - containerPort: 57800
+          name: jgroups-fd
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /health/ready
+            port: 9000
+            scheme: HTTP
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 1
+        resources:
+          limits:
+            cpu: "2"
+            memory: 2000Mi
+          requests:
+            cpu: 500m
+            memory: 1700Mi
+        startupProbe:
+          failureThreshold: 600
+          httpGet:
+            path: /health/started
+            port: 9000
+            scheme: HTTP
+          periodSeconds: 1
+          successThreshold: 1
+          timeoutSeconds: 1
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext: {}
+      terminationGracePeriodSeconds: 30
+  updateStrategy:
+    rollingUpdate:
+      partition: 0
+    type: RollingUpdate
+status:
+  availableReplicas: 1
+  collisionCount: 0
+  currentReplicas: 1
+  currentRevision: keycloak-7f4d4f667
+  observedGeneration: 2
+  readyReplicas: 1
+  replicas: 1
+  updateRevision: keycloak-7f4d4f667
+  updatedReplicas: 1
+  

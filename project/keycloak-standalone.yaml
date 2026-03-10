@@ -1,0 +1,88 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: keycloak
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak-db
+  namespace: keycloak
+spec:
+  selector:
+    matchLabels:
+      app: keycloak-db
+  template:
+    metadata:
+      labels:
+        app: keycloak-db
+    spec:
+      containers:
+      - name: postgres
+        image: bitnami/postgresql:latest
+        env:
+        - name: POSTGRESQL_PASSWORD
+          value: "k3ycloak"
+        - name: POSTGRESQL_DATABASE
+          value: "keycloak"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak-db
+  namespace: keycloak
+spec:
+  ports:
+  - port: 5432
+  selector:
+    app: keycloak-db
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+  namespace: keycloak
+spec:
+  selector:
+    matchLabels:
+      app: keycloak
+  template:
+    metadata:
+      labels:
+        app: keycloak
+    spec:
+      containers:
+      - name: keycloak
+        image: bitnami/keycloak:latest
+        args: ["start-dev", "--http-relative-path=/auth"]
+        env:
+        - name: KEYCLOAK_ADMIN
+          value: "admin"
+        - name: KEYCLOAK_ADMIN_PASSWORD
+          value: "admin"
+        - name: KC_DB
+          value: "postgres"
+        - name: KC_DB_URL
+          value: "jdbc:postgresql://keycloak-db:5432/keycloak"
+        - name: KC_DB_USERNAME
+          value: "postgres"
+        - name: KC_DB_PASSWORD
+          value: "k3ycloak"
+        - name: KC_HOSTNAME_STRICT
+          value: "false"
+        ports:
+        - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak-service
+  namespace: keycloak
+spec:
+  type: NodePort
+  ports:
+  - port: 8080
+    targetPort: 8080
+    nodePort: 30080
+  selector:
+    app: keycloak

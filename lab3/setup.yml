@@ -86,7 +86,22 @@
         name: 
           - kubelet
           - cri-tools 
-        state: present 
+        state: present
+
+    - name: Create kubelet systemd override directory
+      file:
+        path: /etc/systemd/system/kubelet.service.d
+        state: directory
+        mode: '0755'
+
+    - name: Override kubelet ExecStart with config and runtime endpoint
+      copy:
+        dest: /etc/systemd/system/kubelet.service.d/override.conf
+        content: |
+          [Service]
+          ExecStart=
+          ExecStart=/usr/bin/kubelet --config=/var/lib/kubelet/config.yaml --container-runtime-endpoint=unix:///run/containerd/containerd.sock
+      notify: Restart Kubelet
         
     - name: enable kubelet 
       systemd: 
@@ -110,18 +125,9 @@
           cgroupDriver: systemd
           staticPodPath: /etc/kubernetes/manifests
 
-    - name: Modify kubelet service 
-      copy:
-        dest: /etc/systemd/system/kubelet.service.d/10-kubeadm.conf
-        content: |
-          [Service]
-          Environment="KUBELET_EXTRA_ARGS=--config=/var/lib/kubelet/config.yaml"
-      notify: Restart Kubelet
-
     - name: Restart Systemd
       systemd: 
         daemon_reload: yes
-        daemon_reexecute: yes
       notify: Restart Kubelet
 
     - name: Create dir 
@@ -178,4 +184,5 @@
       systemd:
         name: kubelet
         state: restarted
+        daemon_reload: yes
 

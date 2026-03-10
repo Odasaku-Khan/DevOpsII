@@ -1,0 +1,33 @@
+Vagrant.configure("2") do |config|
+  config.vm.box = "bento/ubuntu-22.04"
+  
+  nodes = {
+    "lb" => {ip: "192.168.56.13", ram:1024, cpus:1},
+    "master" => {ip:  "192.168.56.10", ram: 4096, cpus: 3},
+    "master1" => {ip: "192.168.56.11", ram:3072, cpus:2},
+    "master2" => {ip: "192.168.56.12", ram:3072, cpus:2},
+  }
+  nodes.each.with_index do |(name, node_info), index|
+    config.vm.define name do |node|
+      node.vm.hostname = name
+      node.vm.network "private_network", ip: node_info[:ip]
+      node.vm.provider "virtualbox" do |vb|
+        vb.memory = node_info[:ram]
+        vb.cpus = node_info[:cpus]
+      end
+      if index==nodes.size-1
+        node.vm.provision "ansible" do |ansible|
+          ansible.playbook = "Setup.yml"
+          ansible.limit = "all"
+          ansible.groups = {
+            "lb" => ["lb"],
+            "master" => ["master"],
+            "master1" => ["master1"],
+            "master2" => ["master2"],
+            "group" => ["master","master1","master2"]
+          }
+        end
+      end
+    end
+  end
+end

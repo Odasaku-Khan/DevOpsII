@@ -31,6 +31,7 @@
         name: containerd
         state: present 
 
+    
     - name: Containerd config 
       shell: | 
         mkdir -p /etc/containerd 
@@ -73,7 +74,8 @@
           - apt-transport-https
           - ca-certificates
           - curl
-          - gpg 
+          - gpg
+          - wget
         state: present    
 
     - name: Install GPG keyring 
@@ -101,107 +103,123 @@
     - name: wait for download to finish
       pause:
         seconds: 40
+
+    - name: Configure systemd-resolved
+      shell: |
+        mkdir -p /etc/systemd/resolved.conf.d/
+        cat > /etc/systemd/resolved.conf.d/k8s.conf <<EOF
+        [Resolve]
+        DNS=8.8.8.8 8.8.4.4
+        FallbackDNS=1.1.1.1
+        EOF
+        systemctl restart systemd-resolved
+      when: "'master' in group_names"
+
+    - name: Verify DNS resolution
+      shell: nslookup kubernetes.default.svc || echo "DNS pending"
+      when: "'master' in group_names"
+
+    - name: pre pull images
+      shell: kubeadm config images pull
+      when: "'master' in group_names"
     
     - name: Cluster init 
-      shell: kubeadm init --pod-network-cidr=192.168.0.0/16
+      shell: timeout 600 kubeadm init --pod-network-cidr=192.168.0.0/16 2>&1 | tee /root/kubeadm-init.log
       when: "'master' in group_names"
       args: 
         creates: /etc/kubernetes/admin.conf
 
+    - name: Export KUBECONFIG
+      shell: export KUBECONFIG=/etc/kubernetes/admin.conf
+
     - name: Create .kube directory
       shell: |
-        mkdir -p /root/.kube
-        cp -i /etc/kubernetes/admin.conf /root/.kube/config
+        mkdir -p $HOME/.kube
+        cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+        sudo chown $(id -u):$(id -g) $HOME/.kube/config
       when: "'master' in group_names"
 
-    - name: Install Calico network (CNI)
-      shell: kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.27.2/manifests/calico.yaml
+    - name: Install Flannel network (CNI)
+      shell: |
+        kubectl apply -f https://raw.githubusercontent.com/flannel-io/flannel/v0.26.0/Documentation/kube-flannel.yml
       when: "'master' in group_names"
 
     - name: Allow scheduling on master node
       shell: kubectl taint nodes --all node-role.kubernetes.io/control-plane-
       when: "'master' in group_names"
 
-    - name: Install Nginx Ingress Controller
-      shell: 
-        kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/baremetal/deploy.yaml
+    - name: Wait for all nodes to be Ready
+      shell: kubectl wait --for=condition=Ready nodes --all --timeout=300s
       when: "'master' in group_names"
 
-    - name: Wait for ingress controller
-      shell: |
-        kubectl wait --namespace ingress-nginx \
-        --for=condition=ready pod \
-        --selector=app.kubernetes.io/component=controller \
-        --timeout=300s
-      when: "'master' in group_names"
-      register: ingress_result
-      failed_when: 
-        - ingress_result.rc != 0
-        - "'error: no matching resources found' not in ingress_result.stderr"
-      changed_when: false
-
-    - name: Install pip if not present
-      apt:
-        name: python3-pip
-        state: present
-      when: "'master' in group_names"
-
-    - name: Install Kubernetes Python client
-      pip:
-        name: kubernetes
-        state: present
-        executable: pip3
-      when: "'master' in group_names"
-
-    - name: Ensure keycloak namespace exists
-      kubernetes.core.k8s:
-        api_version: v1
-        kind: Namespace
-        name: keycloak
-        state: present
-      when: "'master' in group_names"
-
-    - name: Delete the annoying puta madre webhook
-      shell: kubectl delete validatingwebhookconfigurations ingress-nginx-admission
-      ignore_errors: yes
-      when: "'master' in group_names"
-
-    - name: Create Ingress for Keycloak 
+    - name: Simple Pod manifest
       copy:
-        dest: /tmp/keycloak-ingress.yaml
+        dest: /root/pod.yaml
         content: |
-          apiVersion: networking.k8s.io/v1
-          kind: Ingress
+          apiVersion: v1
+          kind: Pod 
           metadata:
-            name: keycloak-ingress
-            namespace: keycloak
-            annotations:
-              nginx.ingress.kubernetes.io/rewrite-target: /
+            name: nginx 
           spec:
-            ingressClassName: nginx
-            rules:
-              - host: keycloak.local
-                http:
-                  paths:
-                    - path: /
-                      pathType: Prefix
-                      backend:
-                        service:
-                          name: keycloak
-                          port:
-                            number: 8080
+            containers:
+            - name: nginx
+              image: nginx:latest
+              ports:
+              - containerPort: 80          
+
+    - name: Wait for cluster to be ready (check nodes)
+      shell: kubectl get nodes --no-headers | grep -v NotReady || true
+      when: "'master' in group_names"
+      retries: 15
+      delay: 10
+      register: nodes_ready
+      until: nodes_ready.stdout_lines | length > 0
+
+    - name: Wait for service account to be ready 
+      shell: kubectl wait --for=condition=Ready serviceaccount default -n default --timeout=120s
+      when: "'master' in group_names"                    
+
+    - name: Apply Pod manifest 
+      shell: kubectl apply -f /root/pod.yaml
       when: "'master' in group_names"
 
-    - name: Apply Keycloak Ingress
-      shell: kubectl apply -f /tmp/keycloak-ingress.yaml
+    - name: Hardening Pod manifest 
+      copy: 
+        dest: /root/hardening-pod.yaml
+        content: |
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: nginx-secure
+          spec:
+            automountServiceAccountToken: false
+            containers:
+            - name: nginx
+              image: nginx:latest
+              ports:
+              - containerPort: 80
+              securityContext:
+                runAsUser: 1000
+                runAsGroup: 3000
+                fsGroup: 2000
+                capabilities:
+                  drop: ["ALL"]
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                allowPrivilegeEscalation: false
+
+    - name: Apply hardening Pod manifest 
+      shell: kubectl apply -f /root/hardening-pod.yaml
       when: "'master' in group_names"
+      
 
-    - name: Deploy Keycloak 
-      shell: kubectl apply -f https://raw.githubusercontent.com/keycloak/keycloak-quickstarts/main/kubernetes/keycloak.yaml -n keycloak
-      when: "'master' in group_names"
+    - name: Restart kubelet 
+      systemd:
+        name: kubelet
+        state: restarted
 
 
-
+    
   handlers:
   - name: Restart Containerd
     service:

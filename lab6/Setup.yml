@@ -1,0 +1,440 @@
+- name: Setup 
+  hosts: all
+  become: yes 
+  tasks:
+    - name: Wait to become available
+      shell: cloud-init status --wait
+      args: 
+        executable: /bin/bash
+
+    - name: install ca-certificates
+      apt:
+        name: ca-certificates
+        state: present
+
+    - name: Pendejo aka MitMA problem
+      replace:
+        path: /etc/apt/sources.list
+        regexp: 'http://ports.ubuntu.com'
+        replace: 'https://ports.ubuntu.com'
+
+    - name: Update 
+      apt: 
+        update_cache: yes 
+
+    - name: Disable swap if enabled
+      shell: |
+        if swapon --summary | grep -q '^'; then
+          swapoff -a
+        fi
+
+    - name: Permanently disable swap
+      replace: 
+        path: /etc/fstab
+        regexp: '^([^#].*?\sswap\s+.*)$'
+        replace: '# \1'
+
+    - name: Install dependencies
+      apt:
+        name: 
+          - apt-transport-https
+          - curl
+          - gnupg
+          - lsb-release
+        state: present
+
+    - name: Install ContainerD
+      apt:
+        name: containerd
+        state: present 
+
+    - name: Create ContainerD config
+      shell: |
+        mkdir -p /etc/containerd
+        containerd config default > /etc/containerd/config.toml 
+        sed -i "s/SystemdCgroup = false/SystemdCgroup = true/g" /etc/containerd/config.toml 
+      notify: Restart ContainerD
+
+    - name: Load br_netfilter module
+      modprobe:
+        name: br_netfilter
+        state: present
+
+    - name: Br_netfilter load on boot
+      copy:
+        dest: /etc/modules-load.d/k8s.conf
+        content: |
+          br_netfilter
+
+    - name: Set sysctl params for Kubernetes
+      copy:
+        dest: /etc/sysctl.d/k8s.conf
+        content: |
+          net.bridge.bridge-nf-call-ip6tables = 1
+          net.bridge.bridge-nf-call-iptables = 1
+          net.ipv4.ip_forward = 1
+      notify: Reload sysctl
+
+    - name: Apply sysctl params
+      command: sysctl --system
+
+    - name: Force Google DNS
+      lineinfile:
+        path: /etc/resolv.conf
+        line: "nameserver 8.8.8.8"
+        insertbefore: BOF
+
+    - name: Make keyrings directory 
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Add Kubernetes GPG key 
+      shell: |
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.35/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+      args:
+        creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+    - name: Add Kubernetes apt repository
+      copy:
+        dest: /etc/apt/sources.list.d/kubernetes.list
+        content: 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.35/deb/ /'
+
+    - name: Update apt cache after adding Kubernetes repo
+      apt:
+        update_cache: yes
+
+    - name: Install kubeadm, kubelet, kubectl
+      apt:
+        name:
+          - kubeadm
+          - kubelet 
+          - kubectl
+        state: present
+
+    - name: Pre pull images for kubeadm init
+      command: kubeadm config images pull
+
+    - name: Cluster initialization with kubeadm
+      command: kubeadm init --pod-network-cidr='192.168.56.0/16' --apiserver-advertise-address=192.168.56.10
+
+    - name: Hold kubeadm, kubelet, kubectl at current version
+      dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop: [kubeadm, kubelet, kubectl]
+
+    - name: Set up kubeconfig for root
+      shell: |
+        mkdir -p $HOME/.kube
+        cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+        chown $(id -u):$(id -g) $HOME/.kube/config
+
+    - name: Set up kubeconfig for vagrant user
+      shell: |
+        mkdir -p /home/vagrant/.kube
+        cp -i /etc/kubernetes/admin.conf /home/vagrant/.kube/config
+        chown vagrant:vagrant /home/vagrant/.kube/config
+
+    - name: Install Calico CNI
+      shell: |
+        export KUBECONFIG=/etc/kubernetes/admin.conf
+        kubectl apply -f https://docs.projectcalico.org/manifests/calico.yaml
+
+    - name: Wait for all nodes to be ready
+      shell: |
+        export KUBECONFIG=/etc/kubernetes/admin.conf
+        kubectl wait --for=condition=Ready nodes --all --timeout=300s
+
+    - name: Install Nginx Ingress Controller
+      shell: |
+        export KUBECONFIG=/etc/kubernetes/admin.conf
+        kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.7.0/deploy/static/provider/cloud/deploy.yaml
+
+    - name: ns for keycloak
+      shell: |
+        export KUBECONFIG=/etc/kubernetes/admin.conf
+        kubectl create namespace keycloak
+
+    - name: Create Postgres manifest
+      copy:
+        dest: /home/vagrant/postgres.yaml
+        content: |
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: postgres
+            namespace: keycloak
+          spec:
+            selector:
+              app: postgres
+            ports:
+              - protocol: TCP
+                port: 5432
+                targetPort: 5432
+          ---
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: postgres
+            namespace: keycloak
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: postgres
+            template:
+              metadata:
+                labels:
+                  app: postgres
+              spec:
+                containers:
+                  - name: postgres
+                    image: postgres:15.3-alpine
+                    env:
+                      - name: POSTGRES_DB
+                        value: keycloakdb
+                      - name: POSTGRES_USER
+                        value: keycloakuser
+                      - name: POSTGRES_PASSWORD
+                        value: keycloakpass
+                    ports:
+                      - containerPort: 5432
+
+    - name: Apply manifest
+      shell: |
+          export KUBECONFIG=/etc/kubernetes/admin.conf
+          kubectl apply -f /home/vagrant/postgres.yaml
+
+    - name: Create Keycloak manifest
+      copy:
+        dest: /home/vagrant/keycloak.yaml
+        content: |
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: keycloak
+            namespace: keycloak
+          spec:
+            selector:
+              app: keycloak
+            ports:
+              - protocol: TCP
+                port: 8080
+                targetPort: 8080
+          ---
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: keycloak
+            namespace: keycloak
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: keycloak
+            template:
+              metadata:
+                labels:
+                  app: keycloak
+              spec:
+                containers:
+                  - name: keycloak
+                    image: quay.io/keycloak/keycloak:21.0.2
+                    args: ["start-dev"]
+                    env:
+                      - name: KC_DB
+                        value: postgres
+                      - name: KC_DB_URL
+                        value: jdbc:postgresql://postgres.keycloak.svc.cluster.local:5432/keycloakdb
+                      - name: KC_DB_USERNAME
+                        value: keycloakuser
+                      - name: KC_DB_PASSWORD
+                        value: keycloakpass
+                      - name: KEYCLOAK_ADMIN
+                        value: admin
+                      - name: KEYCLOAK_ADMIN_PASSWORD
+                        value: adminpass
+                    ports:
+                      - containerPort: 8080
+
+    - name: Apply Keycloak manifest
+      shell: |
+        export KUBECONFIG=/etc/kubernetes/admin.conf
+        kubectl apply -f /home/vagrant/keycloak.yaml
+
+    - name: TLS Certificate and key
+      shell: |
+        openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+          -keyout /home/vagrant/tls.key \
+          -out /home/vagrant/tls.crt \
+          -subj "/CN=keycloak.local/O=keycloak.local"
+
+    - name: Create TLS secret in Kubernetes
+      shell: |
+        kubectl create secret tls keycloak-tls \
+          --cert=/home/vagrant/tls.crt \
+          --key=/home/vagrant/tls.key \
+          -n keycloak
+
+    - name: Create NetworkPolicy manifest
+      copy:
+        dest: /home/vagrant/netpol.yaml
+        content: |
+          # Default deny all ingress in keycloak namespace
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: default-deny-ingress
+            namespace: keycloak
+          spec:
+            podSelector: {}
+            policyTypes:
+              - Ingress
+          ---
+          # Allow ingress-nginx to reach Keycloak on port 8080
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-ingress-to-keycloak
+            namespace: keycloak
+          spec:
+            podSelector:
+              matchLabels:
+                app: keycloak
+            policyTypes:
+              - Ingress
+            ingress:
+              - from:
+                  - namespaceSelector:
+                      matchLabels:
+                        kubernetes.io/metadata.name: ingress-nginx
+                ports:
+                  - protocol: TCP
+                    port: 8080
+          ---
+          # Allow Keycloak to reach Postgres on port 5432
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-keycloak-to-postgres
+            namespace: keycloak
+          spec:
+            podSelector:
+              matchLabels:
+                app: postgres
+            policyTypes:
+              - Ingress
+            ingress:
+              - from:
+                  - podSelector:
+                      matchLabels:
+                        app: keycloak
+                ports:
+                  - protocol: TCP
+                    port: 5432
+
+    - name: Apply NetworkPolicy manifest
+      shell: |
+        export KUBECONFIG=/etc/kubernetes/admin.conf
+        kubectl apply -f /home/vagrant/netpol.yaml
+
+    - name: Create Ingress manifest
+      copy:
+        dest: /home/vagrant/ingress.yaml
+        content: |
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: keycloak-ingress
+            namespace: keycloak
+            annotations:
+              nginx.ingress.kubernetes.io/ssl-redirect: "true"
+          spec:
+            ingressClassName: nginx
+            tls:
+              - hosts:
+                  - keycloak.local
+                secretName: keycloak-tls
+            rules:
+              - host: keycloak.local
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: keycloak
+                          port:
+                            number: 8080
+
+                   
+    - name: Wait for ingress-nginx admission webhook endpoint to be ready
+      shell: |
+        export KUBECONFIG=/etc/kubernetes/admin.conf
+        for i in $(seq 1 30); do
+          READY=$(kubectl get endpoints ingress-nginx-controller-admission \
+            -n ingress-nginx \
+             -o jsonpath='{.subsets[0].addresses[0].ip}' 2>/dev/null)
+          if [ -n "$READY" ]; then
+            echo "Webhook endpoint ready: $READY"
+            exit 0
+          fi
+          echo "Waiting for webhook endpoint... attempt $i"
+          sleep 10
+        done
+        echo "Timeout waiting for webhook"
+        exit 1
+
+    - name: Apply Ingress manifest
+      shell: |
+        export KUBECONFIG=/etc/kubernetes/admin.conf
+        kubectl apply -f /home/vagrant/ingress.yaml
+
+    - name: Get Ingress NodePort for HTTPS
+      shell: |
+        export KUBECONFIG=/etc/kubernetes/admin.conf
+        kubectl get svc -n ingress-nginx ingress-nginx-controller \
+          -o jsonpath='{.spec.ports[?(@.name=="https")].nodePort}'
+      register: ingress_https_port
+
+    - name: External network scan (simulate external attacker)
+      shell: |
+        nmap -sV -p {{ ingress_https_port.stdout }},8080,5432,6443 192.168.56.10 \
+          -oN /home/vagrant/external_scan.txt 2>&1 || true
+      ignore_errors: yes
+
+    - name: Internal network scan (from inside the cluster perspective)
+      shell: |
+        export KUBECONFIG=/etc/kubernetes/admin.conf
+        # Scan cluster pod CIDR for open ports - misconfiguration check
+        nmap -sn 192.168.0.0/16 -oN /home/vagrant/internal_scan.txt 2>&1 || true
+      ignore_errors: yes
+
+    - name: Display external scan results
+      shell: cat /home/vagrant/external_scan.txt
+      register: ext_scan
+      ignore_errors: yes
+
+    - name: Print external scan
+      debug:
+        msg: "{{ ext_scan.stdout_lines }}"
+
+    - name: Display internal scan results
+      shell: cat /home/vagrant/internal_scan.txt
+      register: int_scan
+      ignore_errors: yes
+
+    - name: Print internal scan
+      debug:
+        msg: "{{ int_scan.stdout_lines }}"
+
+    
+  handlers:
+    - name: Restart ContainerD
+      systemd:
+        name: containerd
+        state: restarted
+    - name: Reload sysctl
+      command: sysctl --system
