@@ -41,6 +41,7 @@
           - curl
           - gnupg
           - lsb-release
+          - nmap
         state: present
 
     - name: Install ContainerD
@@ -117,7 +118,7 @@
       command: kubeadm config images pull
 
     - name: Cluster initialization with kubeadm
-      command: kubeadm init --pod-network-cidr='192.168.56.0/16' --apiserver-advertise-address=192.168.56.10
+      command: kubeadm init --pod-network-cidr=10.244.0.0/16 --apiserver-advertise-address=192.168.56.10
 
     - name: Hold kubeadm, kubelet, kubectl at current version
       dpkg_selections:
@@ -137,10 +138,18 @@
         cp -i /etc/kubernetes/admin.conf /home/vagrant/.kube/config
         chown vagrant:vagrant /home/vagrant/.kube/config
 
+    - name: Remove control-plane taint so pods can schedule on single node
+      shell: |
+        export KUBECONFIG=/etc/kubernetes/admin.conf
+        kubectl taint nodes --all node-role.kubernetes.io/control-plane- || true 
+
     - name: Install Calico CNI
       shell: |
         export KUBECONFIG=/etc/kubernetes/admin.conf
         kubectl apply -f https://docs.projectcalico.org/manifests/calico.yaml
+        kubectl set env daemonset/calico-node -n kube-system \
+          IP_AUTODETECTION_METHOD=interface=eth1 \
+          CALICO_IPV4POOL_CIDR=10.244.0.0/16 || true
 
     - name: Wait for all nodes to be ready
       shell: |
@@ -369,24 +378,12 @@
                           port:
                             number: 8080
 
-                   
-    - name: Wait for ingress-nginx admission webhook endpoint to be ready
+    - name: Delete ingress-nginx admission webhook
       shell: |
         export KUBECONFIG=/etc/kubernetes/admin.conf
-        for i in $(seq 1 30); do
-          READY=$(kubectl get endpoints ingress-nginx-controller-admission \
-            -n ingress-nginx \
-             -o jsonpath='{.subsets[0].addresses[0].ip}' 2>/dev/null)
-          if [ -n "$READY" ]; then
-            echo "Webhook endpoint ready: $READY"
-            exit 0
-          fi
-          echo "Waiting for webhook endpoint... attempt $i"
-          sleep 10
-        done
-        echo "Timeout waiting for webhook"
-        exit 1
+        kubectl delete validatingwebhookconfiguration ingress-nginx-admission --ignore-not-found=true
 
+                   
     - name: Apply Ingress manifest
       shell: |
         export KUBECONFIG=/etc/kubernetes/admin.conf
@@ -398,38 +395,6 @@
         kubectl get svc -n ingress-nginx ingress-nginx-controller \
           -o jsonpath='{.spec.ports[?(@.name=="https")].nodePort}'
       register: ingress_https_port
-
-    - name: External network scan (simulate external attacker)
-      shell: |
-        nmap -sV -p {{ ingress_https_port.stdout }},8080,5432,6443 192.168.56.10 \
-          -oN /home/vagrant/external_scan.txt 2>&1 || true
-      ignore_errors: yes
-
-    - name: Internal network scan (from inside the cluster perspective)
-      shell: |
-        export KUBECONFIG=/etc/kubernetes/admin.conf
-        # Scan cluster pod CIDR for open ports - misconfiguration check
-        nmap -sn 192.168.0.0/16 -oN /home/vagrant/internal_scan.txt 2>&1 || true
-      ignore_errors: yes
-
-    - name: Display external scan results
-      shell: cat /home/vagrant/external_scan.txt
-      register: ext_scan
-      ignore_errors: yes
-
-    - name: Print external scan
-      debug:
-        msg: "{{ ext_scan.stdout_lines }}"
-
-    - name: Display internal scan results
-      shell: cat /home/vagrant/internal_scan.txt
-      register: int_scan
-      ignore_errors: yes
-
-    - name: Print internal scan
-      debug:
-        msg: "{{ int_scan.stdout_lines }}"
-
     
   handlers:
     - name: Restart ContainerD

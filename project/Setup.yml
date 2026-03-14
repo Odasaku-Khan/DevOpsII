@@ -1,7 +1,4 @@
----
-# ============================================================
-# PLAY 1: Load Balancer Setup (HAProxy + Keepalived)
-# ============================================================
+
 - name: Setup Load Balancer
   hosts: lb
   become: yes
@@ -98,9 +95,6 @@
         state: restarted
 
 
-# ============================================================
-# PLAY 2: Common Kubernetes Prerequisites (all master nodes)
-# ============================================================
 - name: Common Kubernetes Setup
   hosts: master, master1, master2
   become: yes
@@ -234,9 +228,6 @@
       command: sysctl --system
 
 
-# ============================================================
-# PLAY 3: Initialize Primary Control Plane
-# ============================================================
 - name: Initialize Primary Master Node
   hosts: master
   become: yes
@@ -305,9 +296,6 @@
       register: register_join_result
 
 
-# ============================================================
-# PLAY 4: Join Additional Control Plane Nodes
-# ============================================================
 - name: Join Additional Master Nodes to Cluster
   hosts: master1, master2
   become: yes
@@ -387,9 +375,6 @@
         chown vagrant:vagrant /home/vagrant/.kube/config
 
 
-# ============================================================
-# PLAY 5: Install CNI and Verify Cluster
-# ============================================================
 - name: Install CNI and Verify Cluster
   hosts: master
   become: yes
@@ -434,10 +419,6 @@
       debug:
         msg: "{{ get_nodes_result.stdout_lines }}"
 
-
-# ============================================================
-# PLAY 6: Install Infrastructure Components
-# ============================================================
 - name: Install Infrastructure Components
   hosts: master
   become: yes
@@ -550,10 +531,6 @@
       debug:
         msg: "Grafana admin password: {{ grafana_password.stdout }}"
 
-
-# ============================================================
-# PLAY 7: Deploy Applications
-# ============================================================
 - name: Deploy Applications
   hosts: master
   become: yes
@@ -562,7 +539,6 @@
       shell: kubectl get ns demo || kubectl create ns demo
       changed_when: false
 
-    # ---- App 1: DevOps Excuse Generator ----
     - name: Deploy Excuse Generator
       shell: |
         kubectl apply -f - <<'EOF'
@@ -630,7 +606,6 @@
               targetPort: 8080
         EOF
 
-    # ---- App 2: Nginx (second app for inter-pod communication demo) ----
     - name: Deploy Nginx app
       shell: |
         kubectl apply -f - <<'EOF'
@@ -695,7 +670,6 @@
               targetPort: 80
         EOF
 
-    # ---- NetworkPolicies (TARGET grade requirement) ----
     - name: Apply default deny-all NetworkPolicy for demo namespace
       shell: |
         kubectl apply -f - <<'EOF'
@@ -825,7 +799,6 @@
                   port: 443
         EOF
 
-    # ---- TLS Certificate ----
     - name: Generate self-signed TLS certificate
       shell: |
         openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
@@ -844,7 +817,6 @@
           --key=/tmp/tls.key \
           -n demo
 
-    # ---- Ingress with TLS ----
     - name: Create Ingress for excuse-generator with TLS
       shell: |
         kubectl apply -f - <<'EOF'
@@ -929,7 +901,4 @@
     - name: Show access info
       debug:
         msg:
-          - "Add to /etc/hosts on your Mac:"
-          - "192.168.56.10  excuses.local nginx.local"
-          - "Then access: https://excuses.local (via NodePort or after port-forwarding)"
           - "Ingress NodePort: kubectl get svc -n ingress-nginx"

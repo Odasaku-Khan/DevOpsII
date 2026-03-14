@@ -6,7 +6,8 @@
       shell: cloud-init status --wait
       args:
         executable: /bin/bash
-    - name: Fix goddamn MiTM problem on mirror 
+
+    - name: Fix MiTM problem on mirror 
       replace: 
         path: /etc/apt/sources.list
         regexp: 'http://ports.ubuntu.com' 
@@ -26,12 +27,11 @@
         regexp: '^.*swap.*$'
         replace: ''
     
-    - name: Install Container 
+    - name: Install containerd
       apt:
         name: containerd
         state: present 
 
-    
     - name: Containerd config 
       shell: | 
         mkdir -p /etc/containerd 
@@ -39,12 +39,12 @@
         sed -i "s/SystemdCgroup = false/SystemdCgroup = true/" /etc/containerd/config.toml
       notify: Restart Containerd
 
-    - name: Intsall br_netfilter 
+    - name: Install br_netfilter 
       modprobe:
         name: br_netfilter
         state: present
 
-    - name: Make it Load on boot 
+    - name: Load br_netfilter on boot 
       copy:
         dest: /etc/modules-load.d/k8s.conf
         content: |
@@ -61,14 +61,13 @@
     - name: Apply sysctl params
       command: sysctl --system
 
-
     - name: Directory for keyring
       file: 
         path: /etc/apt/keyrings 
         state: directory
         mode: "0755"
 
-    - name: Install dependecies 
+    - name: Install dependencies 
       apt:
         name: 
           - apt-transport-https
@@ -100,9 +99,12 @@
           - kubectl
         state: present
 
-    - name: wait for download to finish
-      pause:
-        seconds: 40
+    - name: Wait for kubelet to be active
+      shell: systemctl is-active kubelet || true
+      register: kubelet_status
+      retries: 10
+      delay: 5
+      until: kubelet_status.stdout == "active" or kubelet_status.stdout == "activating"
 
     - name: Configure systemd-resolved
       shell: |
@@ -119,38 +121,41 @@
       shell: nslookup kubernetes.default.svc || echo "DNS pending"
       when: "'master' in group_names"
 
-    - name: pre pull images
+    - name: Pre-pull images
       shell: kubeadm config images pull
       when: "'master' in group_names"
     
+
     - name: Cluster init 
-      shell: timeout 600 kubeadm init --pod-network-cidr=192.168.0.0/16 2>&1 | tee /root/kubeadm-init.log
+      shell: timeout 600 kubeadm init --pod-network-cidr=10.244.0.0/16 2>&1 | tee /root/kubeadm-init.log
       when: "'master' in group_names"
       args: 
         creates: /etc/kubernetes/admin.conf
-
-    - name: Export KUBECONFIG
-      shell: export KUBECONFIG=/etc/kubernetes/admin.conf
 
     - name: Create .kube directory
       shell: |
         mkdir -p $HOME/.kube
         cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
-        sudo chown $(id -u):$(id -g) $HOME/.kube/config
+        chown $(id -u):$(id -g) $HOME/.kube/config
       when: "'master' in group_names"
 
     - name: Install Flannel network (CNI)
-      shell: |
-        kubectl apply -f https://raw.githubusercontent.com/flannel-io/flannel/v0.26.0/Documentation/kube-flannel.yml
+      shell: kubectl apply -f https://raw.githubusercontent.com/flannel-io/flannel/v0.26.0/Documentation/kube-flannel.yml
       when: "'master' in group_names"
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
 
     - name: Allow scheduling on master node
-      shell: kubectl taint nodes --all node-role.kubernetes.io/control-plane-
+      shell: kubectl taint nodes --all node-role.kubernetes.io/control-plane- || true
       when: "'master' in group_names"
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
 
     - name: Wait for all nodes to be Ready
       shell: kubectl wait --for=condition=Ready nodes --all --timeout=300s
       when: "'master' in group_names"
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
 
     - name: Simple Pod manifest
       copy:
@@ -174,14 +179,20 @@
       delay: 10
       register: nodes_ready
       until: nodes_ready.stdout_lines | length > 0
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
 
     - name: Wait for service account to be ready 
       shell: kubectl wait --for=condition=Ready serviceaccount default -n default --timeout=120s
-      when: "'master' in group_names"                    
+      when: "'master' in group_names"
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
 
     - name: Apply Pod manifest 
       shell: kubectl apply -f /root/pod.yaml
       when: "'master' in group_names"
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
 
     - name: Hardening Pod manifest 
       copy: 
@@ -193,15 +204,16 @@
             name: nginx-secure
           spec:
             automountServiceAccountToken: false
+            securityContext:
+              fsGroup: 2000
             containers:
             - name: nginx
-              image: nginx:latest
+              image: nginxinc/nginx-unprivileged:latest
               ports:
-              - containerPort: 80
+              - containerPort: 8080
               securityContext:
                 runAsUser: 1000
                 runAsGroup: 3000
-                fsGroup: 2000
                 capabilities:
                   drop: ["ALL"]
                 readOnlyRootFilesystem: true
@@ -211,17 +223,16 @@
     - name: Apply hardening Pod manifest 
       shell: kubectl apply -f /root/hardening-pod.yaml
       when: "'master' in group_names"
-      
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
 
     - name: Restart kubelet 
       systemd:
         name: kubelet
         state: restarted
 
-
-    
   handlers:
   - name: Restart Containerd
     service:
-        name: containerd
-        state: restarted
+      name: containerd
+      state: restarted
