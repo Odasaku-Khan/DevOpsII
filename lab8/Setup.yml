@@ -119,6 +119,7 @@
 
     - name: Cluster initialization with kubeadm
       command: kubeadm init --pod-network-cidr=10.244.0.0/16 --apiserver-advertise-address=192.168.56.10
+      ignore_errors: yes
 
     - name: Hold kubeadm, kubelet, kubectl at current version
       dpkg_selections:
@@ -131,12 +132,15 @@
         mkdir -p $HOME/.kube
         cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
         chown $(id -u):$(id -g) $HOME/.kube/config
+      run_once: true
 
     - name: Set up kubeconfig for vagrant user
       shell: |
         mkdir -p /home/vagrant/.kube
         cp -i /etc/kubernetes/admin.conf /home/vagrant/.kube/config
         chown vagrant:vagrant /home/vagrant/.kube/config
+      run_once: true
+
 
     - name: Remove control-plane taint so pods can schedule on single node
       shell: |
@@ -150,11 +154,13 @@
         kubectl set env daemonset/calico-node -n kube-system \
           IP_AUTODETECTION_METHOD=interface=eth1 \
           CALICO_IPV4POOL_CIDR=10.244.0.0/16 || true
+      run_once: true
 
     - name: Wait for all nodes to be ready
       shell: |
         export KUBECONFIG=/etc/kubernetes/admin.conf
         kubectl wait --for=condition=Ready nodes --all --timeout=300s
+      ignore_errors: yes
 
     - name: Stateless deployment 
       copy: 
@@ -274,6 +280,19 @@
       shell: |
         export KUBECONFIG=/etc/kubernetes/admin.conf
         kubectl apply -f /home/vagrant/daemonset-deployment.yaml
+
+    - name: Install Kustomize
+      shell: |
+        curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+        mv kustomize /usr/local/bin/
+      args:
+        creates: /usr/local/bin/kustomize
+
+    - name: Install Helm
+      shell: |
+        curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      args:
+        creates: /usr/local/bin/helm
 
   handlers:
     - name: Restart ContainerD
