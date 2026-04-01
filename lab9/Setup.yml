@@ -1,0 +1,336 @@
+- name: Setup 
+  hosts: all
+  become: yes 
+  tasks:
+    - name: Wait to become available
+      shell: cloud-init status --wait
+      args: 
+        executable: /bin/bash
+
+    - name: install ca-certificates
+      apt:
+        name: ca-certificates
+        state: present
+
+    - name: Pendejo aka MitMA problem
+      replace:
+        path: /etc/apt/sources.list
+        regexp: 'http://ports.ubuntu.com'
+        replace: 'https://ports.ubuntu.com'
+
+    - name: Update 
+      apt: 
+        update_cache: yes 
+
+    - name: Disable swap if enabled
+      shell: |
+        if swapon --summary | grep -q '^'; then
+          swapoff -a
+        fi
+
+    - name: Permanently disable swap
+      replace: 
+        path: /etc/fstab
+        regexp: '^([^#].*?\sswap\s+.*)$'
+        replace: '# \1'
+
+    - name: Install dependencies
+      apt:
+        name: 
+          - apt-transport-https
+          - curl
+          - gnupg
+          - lsb-release
+          - nmap
+        state: present
+
+    - name: Install ContainerD
+      apt:
+        name: containerd
+        state: present 
+
+    - name: Create ContainerD config
+      shell: |
+        mkdir -p /etc/containerd
+        containerd config default > /etc/containerd/config.toml 
+        sed -i "s/SystemdCgroup = false/SystemdCgroup = true/g" /etc/containerd/config.toml 
+      notify: Restart ContainerD
+
+    - name: Load br_netfilter module
+      modprobe:
+        name: br_netfilter
+        state: present
+
+    - name: Br_netfilter load on boot
+      copy:
+        dest: /etc/modules-load.d/k8s.conf
+        content: |
+          br_netfilter
+
+    - name: Set sysctl params for Kubernetes
+      copy:
+        dest: /etc/sysctl.d/k8s.conf
+        content: |
+          net.bridge.bridge-nf-call-ip6tables = 1
+          net.bridge.bridge-nf-call-iptables = 1
+          net.ipv4.ip_forward = 1
+      notify: Reload sysctl
+
+    - name: Apply sysctl params
+      command: sysctl --system
+
+    - name: Force Google DNS
+      lineinfile:
+        path: /etc/resolv.conf
+        line: "nameserver 8.8.8.8"
+        insertbefore: BOF
+
+    - name: Make keyrings directory 
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Add Kubernetes GPG key 
+      shell: |
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.35/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+      args:
+        creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+    - name: Add Kubernetes apt repository
+      copy:
+        dest: /etc/apt/sources.list.d/kubernetes.list
+        content: 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.35/deb/ /'
+
+    - name: Update apt cache after adding Kubernetes repo
+      apt:
+        update_cache: yes
+
+    - name: Install kubeadm, kubelet, kubectl
+      apt:
+        name:
+          - kubeadm
+          - kubelet 
+          - kubectl
+        state: present
+
+    - name: Pre pull images for kubeadm init
+      command: kubeadm config images pull
+
+    - name: Cluster initialization with kubeadm
+      command: kubeadm init --pod-network-cidr=10.244.0.0/16 --apiserver-advertise-address=192.168.56.10
+      ignore_errors: yes
+
+    - name: Hold kubeadm, kubelet, kubectl at current version
+      dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop: [kubeadm, kubelet, kubectl]
+
+    - name: Set up kubeconfig for root
+      shell: |
+        mkdir -p $HOME/.kube
+        cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+        chown $(id -u):$(id -g) $HOME/.kube/config
+      run_once: true
+
+    - name: Set up kubeconfig for vagrant user
+      shell: |
+        mkdir -p /home/vagrant/.kube
+        cp -i /etc/kubernetes/admin.conf /home/vagrant/.kube/config
+        chown vagrant:vagrant /home/vagrant/.kube/config
+      run_once: true
+
+
+    - name: Remove control-plane taint so pods can schedule on single node
+      shell: |
+        export KUBECONFIG=/etc/kubernetes/admin.conf
+        kubectl taint nodes --all node-role.kubernetes.io/control-plane- || true 
+
+    - name: Install Calico CNI
+      shell: |
+        export KUBECONFIG=/etc/kubernetes/admin.conf
+        kubectl apply -f https://docs.projectcalico.org/manifests/calico.yaml
+        kubectl set env daemonset/calico-node -n kube-system \
+          IP_AUTODETECTION_METHOD=interface=eth1 \
+          CALICO_IPV4POOL_CIDR=10.244.0.0/16 || true
+      run_once: true
+
+    - name: Wait for all nodes to be ready
+      shell: |
+        export KUBECONFIG=/etc/kubernetes/admin.conf
+        kubectl wait --for=condition=Ready nodes --all --timeout=300s
+      ignore_errors: yes
+
+    - name: Stateless deployment 
+      copy: 
+        dest: /home/vagrant/stateless-deployment.yaml
+        content: |
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: nginx-deployment
+          spec:
+            replicas: 3
+            selector:
+              matchLabels:
+                app: nginx
+            template:
+              metadata:
+                labels:
+                  app: nginx
+              spec:
+                containers:
+                - name: nginx
+                  image: nginx:latest
+                  ports:
+                  - containerPort: 80
+
+    - name: Create stateless deployment
+      shell: |
+        export KUBECONFIG=/etc/kubernetes/admin.conf
+        kubectl apply -f /home/vagrant/stateless-deployment.yaml
+
+    - name: Stateful deployment 
+      copy: 
+        dest: /home/vagrant/stateful-deployment.yaml
+        content: |
+          apiVersion: apps/v1
+          kind: StatefulSet
+          metadata:
+            name: redis-statefulset
+          spec:
+            serviceName: "redis"
+            replicas: 3
+            selector:
+              matchLabels:
+                app: redis
+            template:
+              metadata:
+                labels:
+                  app: redis
+              spec:
+                containers:
+                - name: redis
+                  image: redis:latest
+                  volumeMounts: 
+                    - name: redis-data
+                      mountPath: /data
+                  ports:
+                  - containerPort: 6379
+            volumeClaimTemplates:
+            - metadata:
+                name: redis-data
+              spec:
+                accessModes: ["ReadWriteOnce"]
+                resources:
+                  requests:
+                    storage: 1Gi
+
+    - name: Create stateful deployment
+      shell: |
+        export KUBECONFIG=/etc/kubernetes/admin.conf
+        kubectl apply -f /home/vagrant/stateful-deployment.yaml 
+
+    - name: Stateful - svc 
+      copy: 
+        dest: /home/vagrant/stateful-service.yaml
+        content: |
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: redis-service
+          spec:
+            selector:
+              app: redis
+            ports:
+              - protocol: TCP
+                port: 6379
+                targetPort: 6379
+
+    - name: Create stateful service
+      shell: |
+        export KUBECONFIG=/etc/kubernetes/admin.conf
+        kubectl apply -f /home/vagrant/stateful-service.yaml
+
+    - name: daemonset deployment 
+      copy: 
+        dest: /home/vagrant/daemonset-deployment.yaml
+        content: |
+          apiVersion: apps/v1
+          kind: DaemonSet
+          metadata:
+            name: node-exporter-daemonset
+          spec:
+            selector:
+              matchLabels:
+                app: node-exporter
+            template:
+              metadata:
+                labels:
+                  app: node-exporter
+              spec:
+                containers:
+                - name: node-exporter
+                  image: prom/node-exporter:latest
+                  ports:
+                  - containerPort: 9100
+
+    - name: Create daemonset deployment
+      shell: |
+        export KUBECONFIG=/etc/kubernetes/admin.conf
+        kubectl apply -f /home/vagrant/daemonset-deployment.yaml
+
+    - name: Install Kustomize
+      shell: |
+        curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+        mv kustomize /usr/local/bin/
+      args:
+        creates: /usr/local/bin/kustomize
+
+    - name: Install Helm
+      shell: |
+        curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      args:
+        creates: /usr/local/bin/helm
+
+    - name: Install ArgoCD
+      shell: |
+          export KUBECONFIG=/etc/kubernetes/admin.conf
+          kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
+          kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+          kubectl wait --for=condition=Ready pods --all -n argocd --timeout=300s
+      run_once: true
+
+    - name: Expose ArgoCD API Server
+      shell: |
+        export KUBECONFIG=/etc/kubernetes/admin.conf
+        kubectl patch svc argocd-server -n argocd -p '{"spec": {"type": "NodePort"}}'
+
+    - name: Get ArgoCD initial admin password
+      shell: |
+        export KUBECONFIG=/etc/kubernetes/admin.conf
+        kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d; echo
+      register: argocd_password
+
+    - name: Display ArgoCD initial admin password
+      debug:
+        msg: "ArgoCD initial admin password: {{ argocd_password.stdout }}"
+
+    - name: Boostrap ArgoCD with a sample application
+      shell: |
+        export KUBECONFIG=/etc/kubernetes/admin.conf
+        kubectl apply -f -f https://raw.githubusercontent.com/Odasaku-Khan/DevOpsII/main/lab9/apps/app-of-apps.yaml
+      run_once: true
+
+  handlers:
+    - name: Restart ContainerD
+      service:
+        name: containerd
+        state: restarted  
+    - name: Reload sysctl
+      command: sysctl --system
+      
+
+    
+        
