@@ -15,7 +15,7 @@ spec:
           service:
             type: NodePort
             nodePorts:
-              http: 31080
+              http: 31993
   destination:
     server: https://kubernetes.default.svc
     namespace: ingress-nginx
