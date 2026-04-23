@@ -1,4 +1,8 @@
 Vagrant.configure("2") do |config|
+  config.vm.provider 'qemu' do |qw| 
+    qw.dns_resolver = true
+  end
+
   config.vm.box = "bento/ubuntu-22.04"
   
   nodes = {

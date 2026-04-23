@@ -48,8 +48,6 @@
               balance roundrobin
               option tcp-check
               server master  192.168.56.10:6443 check
-              server master1 192.168.56.11:6443 check
-              server master2 192.168.56.12:6443 check
       notify: Restart HAProxy
 
     - name: Ensure HAProxy is started and enabled
@@ -95,7 +93,7 @@
         state: restarted
 
 - name: Setup pre Kubernetes 
-  hosts: all
+  hosts: master:worker:db
   become: yes
   tasks:
     - name: Wait to become available
@@ -150,6 +148,10 @@
           nameserver 8.8.8.8
           nameserver 8.8.4.4
 
+    - name: Make it immutable to prevent changes by DHCP client
+      command: chattr +i /etc/resolv.conf
+      ignore_errors: yes
+
     - name: Load necessary additional tools 
       apt:
         name:
@@ -159,9 +161,7 @@
           - gnupg
           - lsb-release
           - open-iscsi
-          - findmnt
-          - blkid
-          - lsblk 
+          - util-linux
         state: present
         update_cache: yes
 
@@ -184,7 +184,7 @@
         mode: '0755'
 
     - name: Move default config for Containerd
-      ansible.builtin.command: "containerd config default > /etc/containerd/config.toml"
+      ansible.builtin.shell: "containerd config default > /etc/containerd/config.toml"
       args:
         creates: /etc/containerd/config.toml
 
@@ -194,6 +194,7 @@
         regexp: '^(\s*)SystemdCgroup\s*=\s*false'
         line: '\1SystemdCgroup = true'
         backrefs: yes
+      notify: Restart Containerd
 
     - name: Make keyrings directory 
       file:
@@ -219,14 +220,16 @@
     - name: Install Helm
       shell: |
         curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
-        chmod +x get_helm.sh
+        chmod 700 get_helm.sh
         ./get_helm.sh
       args:
         creates: /usr/local/bin/helm
+      delegate_to: master
       
     - name: Install Kubernetes components
       apt:
         name:
+          - kubeadm
           - kubelet
           - kubectl
         state: present
@@ -238,25 +241,7 @@
         selection: hold
       loop: [kubeadm, kubelet, kubectl]
 
-    - name: Install Calico CNI
-      shell: |
-        kubectl apply -f https://docs.projectcalico.org/manifests/calico.yaml
-        kubectl set env daemonset/calico-node -n kube-system \
-          IP_AUTODETECTION_METHOD=interface=eth1 \
-          CALICO_IPV4POOL_CIDR=10.244.0.0/16 || true
-      run_once: true
 
-    - name: Wait for all nodes to be ready
-      shell: |
-        kubectl wait --for=condition=Ready nodes --all --timeout=300s
-      ignore_errors: yes
-
-    - name: Install HAProxy Ingress Controller
-      shell: |
-        helm repo add haproxy-ingress https://haproxy-ingress.github.io/charts
-        helm repo update
-        helm install haproxy-ingress haproxy-ingress/haproxy-ingress --namespace haproxy-system --create-namespace
-      run_once: true
 
   handlers:
     - name: Reload sysctl
@@ -267,6 +252,134 @@
         name: containerd
         state: restarted
 
+
+- name: Move etc on DB node
+  hosts: db
+  become: yes
+  tasks:
+    - name: Wait to become available
+      shell: cloud-init status --wait
+      args:
+        executable: /bin/bash
+
+    - name: Create etcd group
+      group:
+        name: etcd
+        state: present
+
+    - name: Create etcd user
+      user:
+        name: etcd
+        group: etcd
+        shell: /sbin/nologin
+        system: yes
+        create_home: no
+        state: present
+
+    - name: Create etcd configuration directory
+      file:
+        path: /etc/etcd
+        state: directory
+        mode: '0755'
+
+    - name: Stop and disable apt etcd
+      systemd:
+        name: etcd
+        state: stopped
+        enabled: no
+      ignore_errors: yes
+
+    - name: Remove apt etcd package
+      apt:
+        name: etcd
+        state: absent
+        purge: yes
+    
+    - name: Set etcd version and architecture
+      set_fact:
+        etcd_ver: "v3.5.24" 
+        etcd_arch: "arm64"
+
+    - name: Download etcd binary
+      get_url:
+        url: "https://github.com/etcd-io/etcd/releases/download/v3.5.24/etcd-v3.5.24-linux-arm64.tar.gz"
+        dest: "/tmp/etcd.tar.gz"
+
+    - name: Extract etcd binary
+      unarchive:
+        src: "/tmp/etcd.tar.gz"
+        dest: "/tmp"
+        remote_src: yes
+
+    - name: Install etcd binaries to /usr/bin
+      copy:
+        src: "/tmp/etcd-{{ etcd_ver }}-linux-{{ etcd_arch }}/{{ item }}"
+        dest: "/usr/bin/{{ item }}"
+        mode: '0755'
+        remote_src: yes
+      loop:
+        - etcd
+        - etcdctl
+        - etcdutl
+
+    
+
+    - name: Create etcd configuration directory
+      file:
+        path: /etc/etcd
+        state: directory
+        mode: '0755'
+
+    - name: Configure etcd 
+      copy:
+        dest: /etc/default/etcd
+        content: |
+          ETCD_NAME="etcd-db"
+          ETCD_DATA_DIR="/var/lib/etcd"
+          ETCD_LISTEN_CLIENT_URLS="https://192.168.56.11:2379,https://127.0.0.1:2379"
+          ETCD_ADVERTISE_CLIENT_URLS="https://192.168.56.11:2379"
+          ETCD_LISTEN_PEER_URLS="https://192.168.56.11:2380"
+          ETCD_INITIAL_ADVERTISE_PEER_URLS="https://192.168.56.11:2380"
+          ETCD_INITIAL_CLUSTER="etcd-db=https://192.168.56.11:2380"
+          ETCD_INITIAL_CLUSTER_STATE="new"
+          ETCD_CERT_FILE="/etc/etcd/pki/server.crt"
+          ETCD_KEY_FILE="/etc/etcd/pki/server.key"
+          ETCD_TRUSTED_CA_FILE="/etc/etcd/pki/ca.crt"
+          ETCD_CLIENT_CERT_AUTH="true"
+          ETCD_PEER_CERT_FILE="/etc/etcd/pki/peer.crt"
+          ETCD_PEER_KEY_FILE="/etc/etcd/pki/peer.key"
+          ETCD_PEER_TRUSTED_CA_FILE="/etc/etcd/pki/ca.crt"
+          ETCD_PEER_CLIENT_CERT_AUTH="true"
+
+    - name: Create native etcd systemd unit file
+      copy:
+        dest: /etc/systemd/system/etcd.service
+        content: |
+          [Unit]
+          Description=etcd key-value store
+          Documentation=https://github.com/etcd-io/etcd
+          After=network.target
+
+          [Service]
+          Type=notify
+          EnvironmentFile=/etc/default/etcd
+          ExecStart=/usr/bin/etcd
+          Restart=always
+          RestartSec=10s
+          LimitNOFILE=40000
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: Reload systemd
+
+  handlers:
+    - name: Reload systemd
+      command: systemctl daemon-reload
+
+    - name: Flush handlers 
+      meta: flush_handlers
+
+
 - name: Setup for Master Nodes
   hosts: master
   become: yes
@@ -276,22 +389,160 @@
       args:
         executable: /bin/bash
 
-    - name: Install kubeadm
-      apt:
-        name: kubeadm
-        state: present
-        update_cache: yes
-
     - name: Pre pull images for kubeadm init
       command: kubeadm config images pull
       args:
         creates: /etc/kubernetes/admin.conf
 
-    - name: Cluster initialization with kubeadm
-      command: kubeadm init --pod-network-cidr=10.244.0.0/16 --apiserver-advertise-address=192.168.56.10
+    - name: Write kubeadm config with external etcd
+      copy:
+        dest: /tmp/kubeadm-config.yaml
+        content: |
+          apiVersion: kubeadm.k8s.io/v1beta4
+          kind: ClusterConfiguration
+          kubernetesVersion: v1.35.0
+          controlPlaneEndpoint: "192.168.56.5:6443"
+          networking:
+            podSubnet: "10.244.0.0/16"
+          etcd:
+            external:
+              endpoints:
+                - https://192.168.56.11:2379
+              caFile: /etc/kubernetes/pki/etcd/ca.crt
+              certFile: /etc/kubernetes/pki/etcd/server.crt
+              keyFile: /etc/kubernetes/pki/etcd/server.key
+          ---
+          apiVersion: kubeadm.k8s.io/v1beta4
+          kind: InitConfiguration
+          localAPIEndpoint:
+            advertiseAddress: "192.168.56.10"
+            bindPort: 6443
+
+    - name: Check if etcd certificates already exist
+      stat:
+        path: /etc/kubernetes/pki/etcd/apiserver-etcd-client.key
+      register: etcd_certs_exist
+
+    - name: Write etcd cert generation config
+      copy:
+        dest: /tmp/etcd-cert-config.yaml
+        content: |
+          apiVersion: kubeadm.k8s.io/v1beta4
+          kind: ClusterConfiguration
+          etcd:
+            local:
+              serverCertSANs:
+                - "192.168.56.11"
+                - "etcd-db"
+                - "127.0.0.1"
+                - "localhost"
+              peerCertSANs:
+                - "192.168.56.11"
+                - "etcd-db"
+                - "127.0.0.1"
+                - "localhost"
+
+    - name: Generate etcd certs on master first
+      shell: |
+        kubeadm init phase certs etcd-ca
+        kubeadm init phase certs etcd-server \
+          --config=/tmp/etcd-cert-config.yaml
+        kubeadm init phase certs etcd-peer \
+          --config=/tmp/etcd-cert-config.yaml
+        kubeadm init phase certs etcd-healthcheck-client \
+          --config=/tmp/etcd-cert-config.yaml
+        kubeadm init phase certs apiserver-etcd-client \
+          --config=/tmp/etcd-cert-config.yaml
+      when: not etcd_certs_exist.stat.exists
+
+    - name: Create etcd pki dir on db
+      file:
+        path: /etc/etcd/pki
+        state: directory
+        mode: '0750'
+        owner: etcd
+        group: etcd
+      delegate_to: db
+
+    - name: Fetch etcd certs from master to controller
+      fetch:
+        src: "/etc/kubernetes/pki/etcd/{{ item }}"
+        dest: "/tmp/etcd-certs/{{ item }}"
+        flat: yes
+      loop:
+        - ca.crt
+        - ca.key
+        - server.crt
+        - server.key
+        - peer.crt
+        - peer.key
+
+    - name: Push etcd certs to db node
+      copy:
+        src: "/tmp/etcd-certs/{{ item.file }}"
+        dest: "/etc/etcd/pki/{{ item.file }}"
+        mode: "{{ item.mode }}"
+        owner: etcd
+        group: etcd
+      loop:
+        - { file: 'ca.crt', mode: '0644' }
+        - { file: 'ca.key', mode: '0600' }
+        - { file: 'server.crt', mode: '0644' }
+        - { file: 'server.key', mode: '0600' }
+        - { file: 'peer.crt', mode: '0644' }
+        - { file: 'peer.key', mode: '0600' }
+      delegate_to: db
+
+    - name: Check if cluster is already initialized
+      stat:
+        path: /etc/kubernetes/admin.conf
+      register: kubeadm_init_done
+
+    - name: Stop etcd before reconfiguring
+      systemd:
+        name: etcd
+        state: stopped
+      delegate_to: db
+      when: not kubeadm_init_done.stat.exists
+      ignore_errors: yes
+
+    - name: Clear stale etcd data directory
+      file:
+        path: /var/lib/etcd
+        state: absent
+      delegate_to: db
+      when: not kubeadm_init_done.stat.exists
+
+    - name: Recreate etcd data directory with correct ownership
+      file:
+        path: /var/lib/etcd
+        state: directory
+        owner: etcd
+        group: etcd
+        mode: '0700'
+      delegate_to: db
+      when: not kubeadm_init_done.stat.exists
+
+    - name: Ensure etcd service is started on db node
+      systemd:
+        name: etcd
+        state: started
+        enabled: yes
+      delegate_to: db
+
+    - name: Wait db node to be ready for etcd
+      wait_for:
+        host: 192.168.56.11
+        port: 2379
+        timeout: 20
+        delay: 5
+      delegate_to: master
+
+
+    - name: Cluster initialization with external etcd
+      shell: kubeadm init --config=/tmp/kubeadm-config.yaml --upload-certs
       args:
         creates: /etc/kubernetes/admin.conf
-      run_once: true
 
     - name: Create .kube directory for root
       ansible.builtin.file:
@@ -325,7 +576,42 @@
         group: vagrant
         mode: '0600'
 
+- name: Setup after kube init 
+  hosts: master
+  become: yes
+  tasks:
+    - name: Install Calico CNI
+      shell: |
+        kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.29.0/manifests/calico.yaml
+        kubectl set env daemonset/calico-node -n kube-system \
+          IP_AUTODETECTION_METHOD=interface=eth1 \
+          CALICO_IPV4POOL_CIDR=10.244.0.0/16 || true
+      run_once: true
 
+    - name: Create haproxy-system namespace
+      shell: |
+        kubectl create namespace haproxy-system --dry-run=client -o yaml | kubectl apply -f -
+      run_once: true
+
+    - name: Install HAProxy Ingress Controller
+      shell: |
+        helm repo add haproxy-ingress https://haproxy-ingress.github.io/charts
+        helm repo update
+        helm upgrade --install haproxy-ingress haproxy-ingress/haproxy-ingress \
+          --namespace haproxy-system \
+          --kubeconfig /etc/kubernetes/admin.conf
+      run_once: true
+
+  handlers:
+    - name: Restart Containerd
+      systemd:
+        name: containerd
+        state: restarted
+
+- name: Setup for Master Node after CNI
+  hosts: master 
+  become: yes
+  tasks:
     - name: Remove control-plane taint so pods can schedule on single node
       shell: |
         kubectl taint nodes --all node-role.kubernetes.io/control-plane- || true 
@@ -343,18 +629,20 @@
     - name: Install ArgoCD
       shell: |
         kubectl create namespace argocd || true
-        kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+        kubectl apply -n argocd --server-side -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml 
       run_once: true
 
     - name: Wait for ArgoCD server to be ready
       shell: |
-        kubectl wait --namespace argocd --for=condition=Ready pod -l app.kubernetes.io/name=argocd-server --timeout=300s
+        kubectl wait --namespace argocd --for=condition=Ready pod -l app.kubernetes.io/name=argocd-server --timeout=600s
       run_once: true
+      ignore_errors: yes
 
     - name: Install ArgoCD CLI
       shell: |
-        curl -sSL -o /usr/local/bin/argocd
-
+        curl -sSL -o /usr/local/bin/argocd \
+        https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+        chmod +x /usr/local/bin/argocd
     - name: Expose ArgoCD via NodePort
       shell: |
         kubectl patch svc argocd-server -n argocd \
@@ -390,27 +678,6 @@
       args:
         creates: /etc/kubernetes/kubelet.conf
 
-    - name: Install by helm my PostgreSQL
-      shell: |
-        helm repo add Odasaku-Khan https://Odasaku-khan.github.io/DevOpsII/project/helm-charts/postgresql.yaml
-        helm repo update
-        helm install my-postgresql Odasaku-Khan/postgresql 
-
-    - name: Install Longhorn
-      shell: |
-        helm repo add longhorn https://charts.longhorn.io
-        helm repo update
-        helm install longhorn longhorn/longhorn --namespace longhorn-system --create-namespace
-
-    - name: Wait for Longhorn to be ready
-      shell: |
-        kubectl wait --namespace longhorn-system --for=condition=Ready pod -l app.kubernetes.io/name=longhorn-manager --timeout=300s
-      run_once: true
-
-    - name: Display Longhorn UI access information
-      debug:
-        msg: "Longhorn UI is available at http://<NodeIP>:<NodePort> (check the NodePort with 'kubectl get svc -n longhorn-system')"
-
 - name: Setup for Worker Nodes
   hosts: worker
   become: yes
@@ -425,41 +692,44 @@
       args:
         creates: /etc/kubernetes/kubelet.conf
 
-    - name: Install Keycloak from Helm
+- name: Setup applications from Master
+  hosts: master
+  become: yes
+  tasks:
+    - name: Wait for db and worker to be ready
+      shell: kubectl wait --for=condition=Ready nodes --all --timeout=300s
+
+    - name: Label db node for storage workloads
+      shell: kubectl label node db node-role=storage --overwrite
+
+    - name: Label worker node
+      shell: kubectl label node worker node-role=worker --overwrite
+
+    - name: Install Longhorn on db node
       shell: |
-        helm repo add Odasaku-Khan https://Odasaku-khan.github.io/DevOpsII/project/helm-charts/keycloak.yaml
+        helm repo add longhorn https://charts.longhorn.io
         helm repo update
-        helm install my-keycloak Odasaku-Khan/keycloak
+        helm install longhorn longhorn/longhorn \
+          --namespace longhorn-system --create-namespace \
+          --set longhornManager.nodeSelector."node-role"=storage 
 
-    - name: Wait for Keycloak to be ready
+    - name: Install PostgreSQL on db node
       shell: |
-        kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=my
-      run_once: true
+        helm repo add Odasaku-Khan https://odasaku-khan.github.io/DevOpsII/
+        helm repo update
+        helm install my-postgresql Odasaku-Khan/postgresql \
+          --set nodeSelector."node-role"=storage
 
-    - name: Install Prometheus and Grafana using kube-prometheus-stack
+    - name: Install Keycloak on worker node
+      shell: |
+        helm install my-keycloak Odasaku-Khan/keycloak \
+          --set nodeSelector."node-role"=worker
+
+    - name: Install Prometheus and Grafana on worker node
       shell: |
         helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
         helm repo update
-        helm install monitoring prometheus-community/kube-prometheus-stack --namespace monitoring --create-namespace
-      run_once: true
-
-    - name: Wait for Prometheus and Grafana to be ready
-      shell: |
-        kubectl wait --namespace monitoring --for=condition=Ready pod -l app.kubernetes
-          .io/name=prometheus-server --timeout=300s
-        kubectl wait --namespace monitoring --for=condition=Ready pod -l app.kubernetes
-          .io/name=grafana --timeout=300s
-      run_once: true
-
-    - name: Display Prometheus and Grafana access information
-      debug:
-        msg: |
-          Prometheus is available at http://<NodeIP>:<NodePort> 
-          Grafana is available at http://<NodeIP>:<NodePort>
-
-    
-
-
-
-
-
+        helm install monitoring prometheus-community/kube-prometheus-stack \
+          --namespace monitoring --create-namespace \
+          --set prometheus.prometheusSpec.nodeSelector."node-role"=worker \
+          --set grafana.nodeSelector."node-role"=worker
