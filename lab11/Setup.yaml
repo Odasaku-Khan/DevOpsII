@@ -199,6 +199,7 @@
       command: kubectl argo rollouts version
       register: argo_rollouts_version
       failed_when: argo_rollouts_version.rc != 0
+      ignore_errors: yes
 
     - name: Install metrics-server
       shell: |
