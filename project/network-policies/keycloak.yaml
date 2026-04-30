@@ -3,8 +3,6 @@ kind: NetworkPolicy
 metadata:
   name: default-deny
   namespace: keycloak
-  annotations:
-    argocd.argoproj.io/sync-wave: "10"
 spec:
   podSelector: {}
   policyTypes:
