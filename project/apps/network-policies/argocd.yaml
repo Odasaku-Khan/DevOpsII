@@ -33,7 +33,13 @@ spec:
               kubernetes.io/metadata.name: argocd
   egress:
     - to:
-        - namespaceSelector: {}
+        - namespaceSelector: {}       
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0          # external internet (GitHub)
+      ports:
+        - protocol: TCP
+          port: 443
     - to:
         - namespaceSelector:
             matchLabels:
@@ -43,7 +49,6 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
-
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
