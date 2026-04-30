@@ -1,0 +1,489 @@
+- name: Setup 
+  hosts: all
+  become: yes 
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  tasks:
+    - name: Wait to become available
+      shell: cloud-init status --wait
+      args: 
+        executable: /bin/bash
+
+    - name: install ca-certificates
+      apt:
+        name: ca-certificates
+        state: present
+
+    - name: Pendejo aka MitMA problem
+      replace:
+        path: /etc/apt/sources.list
+        regexp: 'http://ports.ubuntu.com'
+        replace: 'https://ports.ubuntu.com'
+
+    - name: Update 
+      apt: 
+        update_cache: yes 
+
+    - name: Disable swap if enabled
+      shell: |
+        if swapon --summary | grep -q '^'; then
+          swapoff -a
+        fi
+
+    - name: Permanently disable swap
+      replace: 
+        path: /etc/fstab
+        regexp: '^([^#].*?\sswap\s+.*)$'
+        replace: '# \1'
+
+    - name: Install dependencies
+      apt:
+        name: 
+          - apt-transport-https
+          - curl
+          - gnupg
+          - lsb-release
+        state: present
+
+    - name: Install ContainerD
+      apt:
+        name: containerd
+        state: present 
+
+    - name: Create ContainerD config
+      shell: |
+        mkdir -p /etc/containerd
+        containerd config default > /etc/containerd/config.toml 
+        sed -i "s/SystemdCgroup = false/SystemdCgroup = true/g" /etc/containerd/config.toml 
+      notify: Restart ContainerD
+
+    - name: Load br_netfilter module
+      modprobe:
+        name: br_netfilter
+        state: present
+
+    - name: Br_netfilter load on boot
+      copy:
+        dest: /etc/modules-load.d/k8s.conf
+        content: |
+          br_netfilter
+
+    - name: Set sysctl params for Kubernetes
+      copy:
+        dest: /etc/sysctl.d/k8s.conf
+        content: |
+          net.bridge.bridge-nf-call-ip6tables = 1
+          net.bridge.bridge-nf-call-iptables = 1
+          net.ipv4.ip_forward = 1
+      notify: Reload sysctl
+
+    - name: Apply sysctl params
+      command: sysctl --system
+
+    - name: Force Google DNS
+      lineinfile:
+        path: /etc/resolv.conf
+        line: "nameserver 8.8.8.8"
+        insertbefore: BOF
+
+    - name: Make keyrings directory 
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Add Kubernetes GPG key 
+      shell: |
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.35/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+      args:
+        creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+    - name: Add Kubernetes apt repository
+      copy:
+        dest: /etc/apt/sources.list.d/kubernetes.list
+        content: 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.35/deb/ /'
+
+    - name: Update apt cache after adding Kubernetes repo
+      apt:
+        update_cache: yes
+
+    - name: Install kubeadm, kubelet, kubectl
+      apt:
+        name:
+          - kubeadm
+          - kubelet 
+          - kubectl
+        state: present
+
+    - name: Pre pull images for kubeadm init
+      command: kubeadm config images pull
+      args:
+        creates: /etc/kubernetes/admin.conf
+
+    - name: Cluster initialization with kubeadm
+      command: kubeadm init --pod-network-cidr=10.244.0.0/16 --apiserver-advertise-address=192.168.56.10
+      args:
+        creates: /etc/kubernetes/admin.conf
+      run_once: true
+
+    - name: Hold kubeadm, kubelet, kubectl at current version
+      dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop: [kubeadm, kubelet, kubectl]
+
+    - name: Create .kube directory for root
+      ansible.builtin.file:
+        path: /root/.kube
+        state: directory
+        mode: '0755'
+
+    - name: Copy admin.conf to root kubeconfig
+      ansible.builtin.copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /root/.kube/config
+        remote_src: yes
+        owner: root
+        group: root
+        mode: '0600'
+
+    - name: Create .kube directory for vagrant
+      ansible.builtin.file:
+        path: /home/vagrant/.kube
+        state: directory
+        owner: vagrant
+        group: vagrant
+        mode: '0755'
+
+    - name: Copy admin.conf to vagrant kubeconfig
+      ansible.builtin.copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /home/vagrant/.kube/config
+        remote_src: yes
+        owner: vagrant
+        group: vagrant
+        mode: '0600'
+
+
+    - name: Remove control-plane taint so pods can schedule on single node
+      shell: |
+        kubectl taint nodes --all node-role.kubernetes.io/control-plane- || true 
+
+    - name: Install Calico CNI
+      shell: |
+        kubectl apply -f https://docs.projectcalico.org/manifests/calico.yaml
+        kubectl set env daemonset/calico-node -n kube-system \
+          IP_AUTODETECTION_METHOD=interface=eth1 \
+          CALICO_IPV4POOL_CIDR=10.244.0.0/16 || true
+      run_once: true
+
+    - name: Wait for all nodes to be ready
+      shell: |
+        kubectl wait --for=condition=Ready nodes --all --timeout=300s
+      ignore_errors: yes
+
+    - name: Install Argo Rollouts
+      shell: |
+        kubectl create namespace argo-rollouts || true
+        kubectl apply -n argo-rollouts -f \
+          https://github.com/argoproj/argo-rollouts/releases/latest/download/install.yaml
+      run_once: true
+
+    - name: Add Argo Rollouts kubectl plugin
+      shell: |
+        curl -sSL -o /usr/local/bin/kubectl-argo-rollouts \
+          https://github.com/argoproj/argo-rollouts/releases/latest/download/kubectl-argo-rollouts-linux-amd64
+        chmod +x /usr/local/bin/kubectl-argo-rollouts
+      
+    - name: Verify Argo Rollouts plugin installation
+      command: kubectl argo rollouts version
+      register: argo_rollouts_version
+      failed_when: argo_rollouts_version.rc != 0
+      ignore_errors: yes
+
+    - name: Install metrics-server
+      shell: |
+        kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+      run_once: true
+
+    - name: Patch for metrics-server to work in kind
+      shell: |
+        kubectl patch deployment metrics-server -n kube-system \
+          --type='json' -p='[{"op": "add", "path": "/spec/template/spec/containers/0/args/-", "value":"--kubelet-insecure-tls"}]'
+      run_once: true
+
+    - name: Blue Green Deployment service active yaml 
+      copy:
+        dest: /home/vagrant/bluegreen-deployment.yaml
+        content: |
+          apiVersion: apps/v1
+          kind: Service 
+          metadata: 
+            name: blue-green-active
+          spec:
+            selector: 
+              matchLabels:
+                app: blue-green
+            ports:
+              - protocol: TCP
+                port: 80
+                targetPort: 80
+
+    - name: Blue Green Deployment service preview yaml 
+      copy: 
+        dest: /home/vagrant/bluegreen-deployment-preview.yaml
+        content: |
+          apiVersion: apps/v1
+          kind: Service  
+          metadata:
+            name: blue-green-preview
+          spec:
+            selector:
+              matchLabels:
+                app: blue-green-demo
+            ports:
+            - protocol: TCP
+              port: 80
+              targetPort: 80  
+
+    - name: Blue Green Deployment rollout yaml 
+      copy:
+        dest: /home/vagrant/bluegreen-rollout.yaml
+        content: |
+          apiVersion: argoproj.io/v1alpha1
+          kind: Rollout
+          metadata:
+            name: blue-green-rollout
+          spec:
+            replicas: 3
+            selector:
+              matchLabels:
+                app: blue-green-demo
+            template:
+              metadata:
+                labels:
+                  app: blue-green-demo
+              spec:
+                containers:
+                - name: nginx
+                  image: nginx:1.19
+                  ports:
+                  - containerPort: 80
+                  resources:
+                    requests:
+                      cpu: 100m
+                      memory: 128Mi
+                    limits:
+                      cpu: 200m
+                      memory: 256Mi
+            strategy:
+              blueGreen:
+                activeService: blue-green-active
+                previewService: blue-green-preview
+                autoPromotionEnabled: false
+
+    - name: Apply Blue Green Deployment rollout
+      shell: |
+        kubectl apply -f /home/vagrant/bluegreen-deployment.yaml
+        kubectl apply -f /home/vagrant/bluegreen-deployment-preview.yaml
+        kubectl apply -f /home/vagrant/bluegreen-rollout.yaml
+        watch -n 2 kubectl argo rollouts get rollout blue-green-rollout
+      run_once: true
+    
+    - name: Triger new version of Blue Green Deployment
+      shell: |
+        kubectl set image deployment/blue-green-rollout \
+          nginx=nginx:1.20 --record
+        kubectl argo rollouts promote blue-green-rollout
+          watch -n 2 kubectl argo rollouts get rollout blue-green-rollout
+      run_once: true
+
+    - name: Canary App service yaml 
+      copy: 
+        dest: /home/vagrant/canary-deployment.yaml
+        content: |
+          apiVersion: apps/v1
+          kind: Service 
+          metadata: 
+            name: canary-service
+          spec:
+            selector:
+              app: canary-demo
+            ports:
+              - protocol: TCP
+                port: 80
+                targetPort: 80
+
+    - name: Canary App rollout yaml
+      copy:
+        dest: /home/vagrant/canary-rollout.yaml
+        content: |
+          apiVersion: argoproj.io/v1alpha1
+          kind: Rollout
+          metadata:
+            name: canary-rollout
+          spec:
+            replicas: 8
+            selector:
+              matchLabels:
+                app: canary-demo
+            template:
+              metadata:
+                labels:
+                  app: canary-demo
+              spec:
+                containers:
+                - name: nginx
+                  image: nginx:1.19
+                  ports:
+                  - containerPort: 80
+                  resources:
+                    requests:
+                      cpu: 100m
+                      memory: 128Mi
+                    limits:
+                      cpu: 200m
+                      memory: 256Mi
+            strategy:
+              canary:
+                analysis:
+                  templates:
+                    - templateName: canary-failure-analysis
+                    startingStep: 1
+                steps:
+                - setWeight: 20
+                - pause: {}
+                - setWeight: 40
+                - pause: {duration: 10s}
+                - setWeight: 60
+                - pause: {duration: 20s}
+                - setWeight: 80
+                - pause: {duration: 30s}
+                - setWeight: 100
+
+    - name: Apply Canary App rollout
+      shell: |
+        kubectl apply -f /home/vagrant/canary-deployment.yaml
+        kubectl apply -f /home/vagrant/canary-rollout.yaml
+        watch -n 2 kubectl argo rollouts get rollout canary-rollout
+      run_once: true
+
+    - name: Triger new version of Canary App
+      shell: |
+        kubectl set image rollout/canary-rollout \
+          nginx=nginx:1.20 --record
+        watch -n 2 kubectl argo rollouts get rollout canary-rollout
+      run_once: true
+
+    - name: Simulate Failure in Canary App
+      copy:
+        dest: /home/vagrant/canary-failure.yaml
+        content: |
+          apiVersion: argoproj.io/v1alpha1
+          kind: AnalysisTemplate
+          metadata:
+            name: canary-failure-analysis
+          spec:
+            metrics:
+            - name: smoke test 
+              failureLimit: 0
+              provider:
+                job:
+                  spec:
+                    template:
+                      spec:
+                        containers:
+                        - name: smoke-test
+                          image: alpine:latest
+                          command: ["sh", "-c", "exit 1"]
+                        restartPolicy: Never
+                        backoffLimit: 0
+      run_once: true
+                    
+    - name: Apply Canary App failure analysis 
+      shell: |
+        kubectl apply -f /home/vagrant/canary-failure.yaml
+        kubectl argo rollouts set image rollout/canary-rollout \
+          nginx=nginx:1.12 --record
+        kubectl argo rollouts set image rollout/canary-rollout \
+          nginx=nginx:1.20 --record
+        watch -n 2 kubectl argo rollouts get rollout canary-rollout
+      run_once: true
+
+    - name: Install VPA components
+      shell: |
+        git clone https://github.com/kubernetes/autoscaler.git /tmp/autoscaler || true
+        cd /tmp/autoscaler/vertical-pod-autoscaler
+        ./hack/vpa-up.sh
+
+
+    - name: Horizontal Pod Autoscaler yaml
+      copy:
+        dest: /home/vagrant/hpa.yaml
+        content: |
+          apiVersion: autoscaling/v2
+          kind: HorizontalPodAutoscaler
+          metadata:
+            name: canary-hpa
+          spec:
+            scaleTargetRef:
+              apiVersion: apps/v1
+              kind: Rollout
+              name: canary-rollout
+            minReplicas: 2
+            maxReplicas: 10
+            metrics:
+            - type: Resource
+              resource:
+                name: cpu
+                target:
+                  type: Utilization
+                  averageUtilization: 50
+
+    - name: Apply Horizontal Pod Autoscaler
+      shell: |
+        kubectl apply -f /home/vagrant/hpa.yaml
+        watch -n 2 kubectl get hpa canary-hpa
+      run_once: true
+
+    - name: Vertical Pod Autoscaler yaml
+      copy:
+        dest: /home/vagrant/vpa.yaml
+        content: |
+          apiVersion: autoscaling.k8s.io/v1
+          kind: VerticalPodAutoscaler
+          metadata:
+            name: blue-green-vpa
+          spec:
+            targetRef:
+              apiVersion: apps/v1
+              kind: Rollout
+              name: blue-green-rollout
+            updatePolicy:
+              updateMode: "Auto"
+            resourcePolicy:
+              containerPolicies:
+              - containerName: nginx
+                minAllowed:
+                  cpu: 100m
+                  memory: 128Mi
+                maxAllowed:
+                  cpu: 500m
+                  memory: 512Mi
+
+    - name: Apply Vertical Pod Autoscaler
+      shell: |
+        kubectl apply -f /home/vagrant/vpa.yaml
+        watch -n 2 kubectl get vpa blue-green-vpa
+      run_once: true
+
+  handlers: 
+      - name: Restart ContainerD
+        service:
+          name: containerd
+          state: restarted
+  
+      - name: Reload sysctl
+        command: sysctl --system  
+
+      

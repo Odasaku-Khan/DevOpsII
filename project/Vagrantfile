@@ -1,0 +1,37 @@
+Vagrant.configure("2") do |config|
+  config.vm.provider 'qemu' do |qw| 
+    qw.dns_resolver = true
+  end
+
+  config.vm.box = "bento/ubuntu-22.04"
+  
+  nodes = {
+    "lb" => {ip: "192.168.56.13", ram:1024, cpus:1},
+    "master" => {ip:  "192.168.56.10", ram: 4096, cpus: 3},
+    "db" => {ip: "192.168.56.11", ram:4096, cpus:2},
+    "worker" => {ip: "192.168.56.12", ram:4096, cpus:2},
+  }
+  nodes.each.with_index do |(name, node_info), index|
+    config.vm.define name do |node|
+      node.vm.hostname = name
+      node.vm.network "private_network", ip: node_info[:ip]
+      node.vm.provider "virtualbox" do |vb|
+        vb.memory = node_info[:ram]
+        vb.cpus = node_info[:cpus]
+      end
+      if index==nodes.size-1
+        node.vm.provision "ansible" do |ansible|
+          ansible.playbook = "Setup.yml"
+          ansible.limit = "all"
+          ansible.groups = {
+            "lb" => ["lb"],
+            "master" => ["master"],
+            "db" => ["db"],
+            "worker" => ["worker"],
+            "group" => ["master","db","worker"]
+          }
+        end
+      end
+    end
+  end
+end

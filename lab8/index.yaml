@@ -1,0 +1,19 @@
+apiVersion: v1
+entries:
+  Keycloak_Postgress:
+  - apiVersion: v2
+    appVersion: "23.0"
+    created: "2026-03-25T22:09:57.781517+05:00"
+    dependencies:
+    - condition: postgresql.enabled
+      name: postgresql
+      repository: https://charts.bitnami.com/bitnami
+      version: 18.5.9
+    description: Keycloak Identity Provider with PostgreSQL backend
+    digest: 05a3d0f0336e1177866750fd3414e843ae22f940fef29b2786350a36ebd0646f
+    name: Keycloak_Postgress
+    type: application
+    urls:
+    - https://Odasaku-Khan.github.io/DevOpsII/lab8/Keycloak_Postgress-0.1.0.tgz
+    version: 0.1.0
+generated: "2026-03-25T22:09:57.774764+05:00"

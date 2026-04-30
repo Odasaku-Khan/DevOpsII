@@ -1,0 +1,14 @@
+# Terraform
+terraform.tfstate*
+.terraform/
+terraform.json
+
+# Ansible
+*.retry
+
+# SSH
+*.pem
+*.key
+
+# Vagrant
+.vagrant/

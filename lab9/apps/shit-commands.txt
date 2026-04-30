@@ -1,0 +1,29 @@
+kubectl apply -f - <<EOF
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: sealed-secrets
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://bitnami-labs.github.io/sealed-secrets
+    chart: sealed-secrets
+    targetRevision: 2.x.x
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kube-system
+  syncPolicy:
+    automated: {}
+EOF
+
+curl -sSL https://github.com/bitnami-labs/sealed-secrets/releases/download/v0.26.0/kubeseal-0.26.0-linux-arm64.tar.gz | tar xz
+sudo mv kubeseal /usr/local/bin/
+
+kubectl create secret generic keycloak-secret \
+  --from-literal=adminPassword=admin123 \
+  --from-literal=dbPassword=keycloak123 \
+  --dry-run=client -o yaml > /tmp/keycloak-secret.yaml
+
+kubeseal --format yaml < /tmp/keycloak-secret.yaml > lab9/sealed-secrets/keycloak-sealed.yaml
+

@@ -1,0 +1,108 @@
+---
+- name: Script
+  hosts: all
+  become: yes
+  vars:
+    postgres_password: "Kakashi19096"
+    keycloak_admin_password: "Kakashi19096"
+  
+  tasks:
+    - name: Update
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: common staff
+      apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+          - python3-pip
+        state: present
+
+    - name: Python
+      pip: 
+        name: docker
+
+    - name: Docker key
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Docker repo
+      apt_repository:
+        repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+        state: present
+
+    - name: Docker pack
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+        state: present
+        update_cache: yes
+
+    - name: Enabel
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Groupping
+      user:
+        name: ubuntu
+        groups: docker
+        append: yes
+
+    - name: Docker network
+      docker_network:
+        name: lab-network
+        driver: bridge
+
+    - name: PostreSQL
+      docker_container:
+        name: postgres-db
+        image: postgres:15
+        state: started
+        restart_policy: always
+        env:
+          POSTGRES_DB: keycloak
+          POSTGRES_USER: keycloak
+          POSTGRES_PASSWORD: "{{ postgres_password }}"
+        networks:
+          - name: lab-network
+        ports:
+          - "5432:5432"
+        volumes:
+          - postgres_data:/var/lib/postgresql/data
+
+    - name: Run Keycloak container
+      docker_container:
+        name: keycloak-app
+        image: quay.io/keycloak/keycloak:22.0.5
+        state: started
+        restart_policy: always
+        env:
+          KEYCLOAK_ADMIN: admin
+          KEYCLOAK_ADMIN_PASSWORD: "{{ keycloak_admin_password }}"
+          KC_DB: postgres
+          KC_DB_URL_HOST: postgres-db
+          KC_DB_USERNAME: keycloak
+          KC_DB_PASSWORD: "{{ postgres_password }}"
+          KC_HOSTNAME: localhost
+        networks:
+          - name: lab-network
+        ports:
+          - "8080:8080"
+        command: start-dev
+
+    - name: Display access information
+      debug:
+        msg:
+          - "PostgreSQL running on port 5432"
+          - "Keycloak URL: http://{{ ansible_host }}:8080"
+          - "Keycloak admin: admin / {{ keycloak_admin_password }}"
+          - "PostgreSQL: keycloak / {{ postgres_password }}"

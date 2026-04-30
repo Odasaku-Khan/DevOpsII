@@ -1,0 +1,20 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: keycloak-postgres
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://Odasaku-Khan.github.io/DevOpsII/lab8/
+    chart: Keycloak_Postgress
+    targetRevision: 0.1.0
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: keycloak-namespace
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+    - CreateNamespace=true

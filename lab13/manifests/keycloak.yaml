@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+  namespace: lab13
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: keycloak
+  template:
+    metadata:
+      labels:
+        app: keycloak
+    spec:
+      containers:
+        - name: keycloak
+          image: quay.io/keycloak/keycloak:24.0
+          args: ["start-dev", "--http-enabled=true", "--https-certificate-file=/opt/keycloak/conf/tls.crt", "--https-certificate-key-file=/opt/keycloak/conf/tls.key"]
+          env:
+            - name: KC_DB
+              value: postgres
+            - name: KC_DB_URL
+              value: jdbc:postgresql://postgres/keycloak
+            - name: KC_DB_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_USER
+            - name: KC_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_PASSWORD
+            - name: KEYCLOAK_ADMIN
+              value: admin
+            - name: KEYCLOAK_ADMIN_PASSWORD
+              value: admin_pass_2024
+            - name: KC_HTTPS_PORT
+              value: "8443"
+          ports:
+            - containerPort: 8443
+              name: https
+          volumeMounts:
+            - name: certs
+              mountPath: /opt/keycloak/conf/tls.crt
+              subPath: tls.crt
+            - name: certs-key
+              mountPath: /opt/keycloak/conf/tls.key
+              subPath: tls.key
+      volumes:
+        - name: certs
+          secret:
+            secretName: keycloak-tls-secret
+        - name: certs-key
+          secret:
+            secretName: keycloak-tls-secret
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak
+  namespace: lab13
+spec:
+  selector:
+    app: keycloak
+  ports:
+    - port: 443
+      targetPort: 8443
+      name: https
