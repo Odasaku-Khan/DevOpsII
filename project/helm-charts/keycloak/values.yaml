@@ -33,18 +33,21 @@ hostname:
 service:
   type: ClusterIP
   port: 80
-  httpsport: 443
+  httpsPort: 443
   httpContainerPort: 8080
   httpsContainerPort: 8443
 
 ingress:
   enabled: true 
-  className: "HAproxy"
+  className: "haproxy"
   annotations: 
-    kubernetes.io/ingress.class: "HAproxy"
+    kubernetes.io/ingress.class: "haproxy"
     cert-manager.io/cluster-issuer: "letsencrypt-prod"
   hosts:
     - host: keycloak.local
+      paths:
+        - path: /
+          pathType: Prefix
 
   tls:
     - secretName: keycloak-tls
@@ -60,11 +63,10 @@ resources:
     memory: 512Mi
 
 podSecurityContext:
-  enabled: true
   fsGroup: 1000
 
 containerSecurityContext:
-  enabled: true
+
   runAsUser: 1000
   runAsGroup: 1000
   allowPrivilegeEscalation: false
