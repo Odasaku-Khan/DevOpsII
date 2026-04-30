@@ -58,9 +58,10 @@ spec:
     - Ingress
     - Egress
   ingress:
-    - namespaceSelector:
-        matchLabels:
-          kubernetes.io/metadata.name: monitoring
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
   egress:
     - to:
         - namespaceSelector:
