@@ -79,6 +79,9 @@ extraEnv:
     value: "true"
   - name: KC_LOG_LEVEL
     value: "DEBUG"
+  - name: KC_HOSTNAME_STRICT
+    value: "false"
+
 
 livenessProbe:
   enabled: true
