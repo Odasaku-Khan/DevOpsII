@@ -3,11 +3,13 @@ kind: Application
 metadata:
   name: app-of-apps
   namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
 spec:
   project: default
   source:
     repoURL: https://github.com/Odasaku-Khan/DevOpsII
-    path: project/apps
+    path: project/argocd-apps
     targetRevision: main
   destination:
     server: https://kubernetes.default.svc
@@ -16,3 +18,6 @@ spec:
     automated:
       prune: true
       selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

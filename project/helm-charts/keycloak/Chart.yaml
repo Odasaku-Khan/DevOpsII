@@ -1,0 +1,14 @@
+apiVersion: v2
+name: keycloak
+description: A Helm chart of Keycloak for Kubernetes
+type: application
+version: 0.1.0
+appVersion: "25.0.1"
+keywords:
+  - keycloak
+  - sso
+  - oauth2
+  
+maintainers:
+  - name: Khan Nussipakhyn
+

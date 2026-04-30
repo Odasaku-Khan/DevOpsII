@@ -1,0 +1,121 @@
+replicaCount: 1
+
+image:
+  repository: quay.io/keycloak/keycloak
+  pullPolicy: IfNotPresent
+  tag: "25.0.1"
+
+admin: 
+  username: admin
+  password: admin
+  existingSecret: ""
+  secretKeys:
+    username: admin-username
+    password: admin-password
+
+database: 
+  vendor: postgres
+  host: "postgresql"
+  port: 5432
+  name: keycloak 
+  username: keycloak
+  password: "keycloak"
+  existingSecret: ""
+  secretKeys:
+    username: postgresql-username
+    password: postgresql-password
+
+startMode: "start"
+
+hostname: 
+  hostname: ""
+  hostnameStrict: true 
+
+service:
+  type: ClusterIP
+  port: 80
+  httpsport: 443
+  httpcontainerPort: 8080
+  httpscontainerPort: 8443
+
+ingress:
+  enabled: true 
+  className: "HAproxy"
+  annotations: 
+    kubernetes.io/ingress.class: "HAproxy"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  hosts:
+    - host: keycloak.local
+
+  tls:
+    - secretName: keycloak-tls
+      hosts:
+        - keycloak.local
+
+resources: 
+  limits:
+    cpu: 500m
+    memory: 1024Mi
+  requests:
+    cpu: 250m
+    memory: 512Mi
+
+podSecurityContext:
+  enabled: true
+  fsGroup: 1000
+
+containerSecurityContext:
+  enabled: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  allowPrivilegeEscalation: false
+
+
+extraEnv: 
+  - name: PROXY_ADDRESS_FORWARDING
+    value: "true"
+  - name: KC_LOG_LEVEL
+    value: "DEBUG"
+
+livenessProbe:
+  enabled: true
+  initialDelaySeconds: 60
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 6
+  httpGet: 
+    path: /health/live
+    port: 9000
+
+readinessProbe:
+  enabled: true
+  initialDelaySeconds: 60
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 6
+  httpGet:
+    path: /health/ready
+    port: 9000
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+
+serviceAccount:
+  create: true
+  name: ""
+  automount: false
+  annotations: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+httpRoute:
+  enabled: false
+  annotations: {}
+  parentRefs: []
+  hostnames: []
+  rules: []

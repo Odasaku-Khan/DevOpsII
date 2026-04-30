@@ -1,0 +1,71 @@
+replicaCount: 1
+
+image:
+  repository: postgres
+  tag: "18.0"
+  pullPolicy: IfNotPresent
+
+auth: 
+  database: keycloak
+  username: keycloak
+  password: "keycloak"
+  postgresPassword: "keycloak"
+
+  existingSecret: ""
+  secretKeys: 
+    adminPasswordKey: postgres-password
+    userPasswordKey: password
+
+service:
+  type: ClusterIP
+  port: 5432 
+
+persistence: 
+  enabled: true 
+  storageClass: "Longhorn"
+  accessMode: ReadWriteOnce
+  size: 8Gi
+
+  mountPath: /var/lib/postgresql/data
+  subPath: pgdata
+
+resources: 
+  limits:
+    cpu: 1000m
+    memory: 512Mi
+  requests:
+    cpu: 500m
+    memory: 256Mi
+
+extraEnv: []
+
+podSecurityContext:
+  enabled: true
+  fsGroup: 999
+
+containerSecurityContext:
+  enabled: true 
+  runAsUser: 999
+  runAsGroup: 999
+  runAsNonRoot: true
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+
+livenessProbe:
+  enabled: true 
+  initialDelaySeconds: 30
+  periodSeconds: 15
+  timeoutSeconds: 5 
+  failureThreshold: 6
+
+readinessProbe:
+  enabled: true
+  initialDelaySeconds: 30
+  periodSeconds: 15
+  timeoutSeconds: 5
+  failureThreshold: 6
+
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
