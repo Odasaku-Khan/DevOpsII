@@ -4,44 +4,44 @@ metadata:
   name: keycloak-dashboard
   namespace: monitoring
   labels:
-    grafana_dashboard: "1"    
+    grafana_dashboard: "1"
 data:
   keycloak-dashboard.json: |
     {
       "title": "Keycloak Overview",
       "uid": "keycloak-overview",
+      "schemaVersion": 36,
+      "version": 1,
       "panels": [
         {
           "title": "Pod restarts",
           "type": "stat",
           "gridPos": {"x":0,"y":0,"w":6,"h":4},
+          "datasource": "Prometheus",
           "targets": [{
             "expr": "kube_pod_container_status_restarts_total{namespace=\"keycloak\"}",
-            "legendFormat": "{{pod}}"
-          }],
-          "datasource": "Prometheus"
+            "legendFormat": "{{ "{{" }}pod{{ "}}" }}"
+          }]
         },
         {
           "title": "Memory usage (MB)",
           "type": "timeseries",
           "gridPos": {"x":6,"y":0,"w":18,"h":8},
+          "datasource": "Prometheus",
           "targets": [{
             "expr": "container_memory_usage_bytes{namespace=\"keycloak\",container=\"keycloak\"} / 1024 / 1024",
-            "legendFormat": "{{pod}}"
-          }],
-          "datasource": "Prometheus"
+            "legendFormat": "{{ "{{" }}pod{{ "}}" }}"
+          }]
         },
         {
           "title": "CPU usage",
           "type": "timeseries",
           "gridPos": {"x":0,"y":8,"w":24,"h":8},
+          "datasource": "Prometheus",
           "targets": [{
             "expr": "rate(container_cpu_usage_seconds_total{namespace=\"keycloak\",container=\"keycloak\"}[2m])",
-            "legendFormat": "{{pod}}"
-          }],
-          "datasource": "Prometheus"
+            "legendFormat": "{{ "{{" }}pod{{ "}}" }}"
+          }]
         }
-      ],
-      "schemaVersion": 36,
-      "version": 1
+      ]
     }
