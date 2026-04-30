@@ -79,8 +79,6 @@ extraEnv:
     value: "true"
   - name: KC_LOG_LEVEL
     value: "DEBUG"
-  - name: KC_HOSTNAME_STRICT
-    value: "false"
 
 
 livenessProbe:
@@ -123,5 +121,7 @@ httpRoute:
   enabled: false
   annotations: {}
   parentRefs: []
-  hostnames: []
+  hostname:
+    hostname: "" 
+    hostnameStrict: false
   rules: []
