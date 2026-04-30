@@ -12,6 +12,5 @@ admin:
 database:
   existingSecret: "keycloak-db"
 
-
 nodeSelector:
   node-role: worker

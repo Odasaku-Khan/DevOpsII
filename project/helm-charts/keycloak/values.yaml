@@ -80,10 +80,6 @@ containerSecurityContext:
 
 
 extraEnv:
-  - name: KC_HEALTH_ENABLED
-    value: "true"
-  - name: KC_METRICS_ENABLED
-    value: "true"
   - name: JAVA_OPTS_APPEND
     value: "-XX:UseSVE=0"
   - name: PROXY_ADDRESS_FORWARDING
