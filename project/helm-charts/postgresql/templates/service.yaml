@@ -1,10 +1,10 @@
-apiVersion: apps/v1
+apiVersion: v1
 kind: Service
 metadata:
     name: {{ include "postgresql.fullname" . }}-headless
     namespace: {{ .Release.Namespace }}
     labels:
-      {{- include "postgresql.labels" . | nindent 4 }}
+        {{- include "postgresql.labels" . | nindent 4 }}
 spec:
     clusterIP: None
     selector:
@@ -21,7 +21,7 @@ metadata:
     name: {{ include "postgresql.fullname" . }}
     namespace: {{ .Release.Namespace }}
     labels:
-      {{- include "postgresql.labels" . | nindent 4 }}
+        {{- include "postgresql.labels" . | nindent 4 }}
 spec:
     type: {{ .Values.service.type }}
     selector:
