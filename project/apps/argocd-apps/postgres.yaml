@@ -14,12 +14,6 @@ spec:
     helm:
       valueFiles:
         - values.yaml
-      parameters:
-        - name: postgresqlPassword
-          valueFrom:
-            secretKeyRef:
-              name: postgres-db
-              key: password
   destination:
     server: https://kubernetes.default.svc
     namespace: postgres

@@ -15,15 +15,13 @@ admin:
 
 database: 
   vendor: postgres
-  host: "postgresql"
+  host: "postgresql.postgres.svc.cluster.local"
   port: 5432
   name: keycloak 
   username: keycloak
-  password: "keycloak"
-  existingSecret: ""
+  existingSecret: "keycloak-db"
   secretKeys:
-    username: postgresql-username
-    password: postgresql-password
+    password: "password"
 
 startMode: "start"
 
