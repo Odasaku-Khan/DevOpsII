@@ -28,7 +28,7 @@ startMode: "start"
 
 hostname: 
   hostname: ""
-  hostnameStrict: true 
+  hostnameStrict: false 
 
 service:
   type: ClusterIP
