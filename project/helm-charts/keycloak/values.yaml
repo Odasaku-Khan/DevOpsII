@@ -24,7 +24,7 @@ database:
     usernameKey: "username"
     passwordKey: "password"
 
-startMode: "start"
+startMode: "start-dev"
 
 hostname: 
   hostname: ""
