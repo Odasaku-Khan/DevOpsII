@@ -10,18 +10,19 @@ admin:
   password: admin
   existingSecret: ""
   secretKeys:
-    username: admin-username
-    password: admin-password
+    usernameKey: admin-username
+    passwordKey: admin-password
 
 database: 
   vendor: postgres
-  host: "postgresql.postgres.svc.cluster.local"
+  host: "postgres-postgresql.postgres.svc.cluster.local"
   port: 5432
   name: keycloak 
   username: keycloak
   existingSecret: "keycloak-db"
   secretKeys:
-    password: "password"
+    usernameKey: "username"
+    passwordKey: "password"
 
 startMode: "start"
 
@@ -33,8 +34,8 @@ service:
   type: ClusterIP
   port: 80
   httpsport: 443
-  httpcontainerPort: 8080
-  httpscontainerPort: 8443
+  httpContainerPort: 8080
+  httpsContainerPort: 8443
 
 ingress:
   enabled: true 
