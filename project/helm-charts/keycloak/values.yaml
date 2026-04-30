@@ -73,6 +73,8 @@ containerSecurityContext:
 
 
 extraEnv: 
+  - name: JAVA_OPTS_APPEND
+    value: "-XX:UseSVE=0 -XX:+UseSerialGC"
   - name: PROXY_ADDRESS_FORWARDING
     value: "true"
   - name: KC_LOG_LEVEL
