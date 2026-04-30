@@ -3,3 +3,7 @@ image:
   tag: "25.0.1"
 extraLabels:
   version: blue
+admin:
+  existingSecret: "keycloak-admin"
+database:
+  existingSecret: "keycloak-db"
