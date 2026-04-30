@@ -25,6 +25,13 @@ spec:
       - CreateNamespace=true
       - ServerSideApply=true
       - Validate=false
+  ignoreDifferences:
+    - group: apps
+      kind: StatefulSet
+      jsonPointers:
+        - /spec/volumeClaimTemplates/0/status
+        - /spec/volumeClaimTemplates/0/apiVersion
+        - /spec/volumeClaimTemplates/0/kind
 
 
   
