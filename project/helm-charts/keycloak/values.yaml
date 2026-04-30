@@ -79,8 +79,6 @@ extraEnv:
     value: "true"
   - name: KC_LOG_LEVEL
     value: "DEBUG"
-  - name: KC_HEALTH_ENABLED
-    value: "true"
 
 livenessProbe:
   enabled: true
