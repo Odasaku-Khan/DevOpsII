@@ -22,7 +22,7 @@ service:
 
 persistence: 
   enabled: true 
-  storageClass: "Longhorn"
+  storageClass: "longhorn"
   accessMode: ReadWriteOnce
   size: 8Gi
 
