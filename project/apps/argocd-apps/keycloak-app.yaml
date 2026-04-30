@@ -6,16 +6,18 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/Odasaku-Khan/DevOpsII
+    repoURL: https://github.com/Odasaku-Khan/DevOpsII.git
     targetRevision: main
     path: project/helm-charts/keycloak
     helm:
       valueFiles:
         - values.yaml
       parameters:
-        secretKeyRef:
-          name: keycloak-db
-          key: password
+        - name: someParameterName  
+          valueFrom:
+            secretKeyRef:
+              name: keycloak-db
+              key: password
   destination:
     server: https://kubernetes.default.svc
     namespace: keycloak

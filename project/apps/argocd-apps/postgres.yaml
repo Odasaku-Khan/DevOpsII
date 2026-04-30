@@ -8,7 +8,7 @@ metadata:
 spec:
   project: default
   source: 
-    repoURL: https://github.com/Odasaku-Khan/DevOpsII
+    repoURL: https://github.com/Odasaku-Khan/DevOpsII.git
     targetRevision: main
     path: project/helm-charts/postgresql
     helm:
