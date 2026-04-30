@@ -1,19 +1,19 @@
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: default-deny
+  name: keycloak-default-deny
   namespace: keycloak
 spec:
   podSelector: {}
   policyTypes:
     - Ingress
     - Egress
-    
+
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-dns
+  name: keycloak-allow-dns
   namespace: keycloak
 spec:
   podSelector: {}
@@ -29,11 +29,12 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
+
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-postgres-egress
+  name: keycloak-allow-egress-to-postgres
   namespace: keycloak
 spec:
   podSelector:
@@ -46,14 +47,18 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: postgres
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgresql
       ports:
         - protocol: TCP
           port: 5432
+
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-ingress-from-haproxy
+  name: keycloak-allow-ingress-from-haproxy
   namespace: keycloak
 spec:
   podSelector:
@@ -69,27 +74,12 @@ spec:
       ports:
         - protocol: TCP
           port: 8080
+
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-healthcheck
-  namespace: keycloak
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/name: keycloak
-  policyTypes:
-    - Ingress
-  ingress:
-    - ports:
-        - protocol: TCP
-          port: 9000
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: allow-metrics-scraping
+  name: keycloak-allow-monitoring
   namespace: keycloak
 spec:
   podSelector:
@@ -110,13 +100,18 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-kubelet-probes
+  name: keycloak-allow-node-healthchecks
   namespace: keycloak
 spec:
-  podSelector: {}
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: keycloak
   policyTypes:
     - Ingress
   ingress:
     - from:
         - ipBlock:
-            cidr: 192.168.56.0/24   
+            cidr: 192.168.56.0/24
+      ports:
+        - protocol: TCP
+          port: 9000
