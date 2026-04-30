@@ -9,7 +9,7 @@ spec:
   project: default
   source:
     repoURL: https://github.com/Odasaku-Khan/DevOpsII
-    path: project/apps
+    path: project/apps/argocd-apps
     targetRevision: main
   destination:
     server: https://kubernetes.default.svc
