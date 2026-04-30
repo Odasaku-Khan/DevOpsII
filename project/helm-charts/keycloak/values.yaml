@@ -26,6 +26,16 @@ database:
 
 startMode: "start-dev"
 
+startupProbe:
+  enabled: true
+  initialDelaySeconds: 90
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 30
+  httpGet:
+    path: /health/live
+    port: 9000
+
 hostname: 
   hostname: ""
   hostnameStrict: false 
@@ -51,13 +61,13 @@ ingress:
 
   tls: []
 
-resources: 
+resources:
   limits:
-    cpu: 500m
-    memory: 1024Mi
+    cpu: 1000m
+    memory: 1536Mi
   requests:
-    cpu: 250m
-    memory: 512Mi
+    cpu: 500m
+    memory: 768Mi
 
 podSecurityContext:
   fsGroup: 1000
@@ -69,22 +79,26 @@ containerSecurityContext:
   allowPrivilegeEscalation: false
 
 
-extraEnv: 
+extraEnv:
+  - name: KC_HEALTH_ENABLED
+    value: "true"
+  - name: KC_METRICS_ENABLED
+    value: "true"
   - name: JAVA_OPTS_APPEND
-    value: "-XX:UseSVE=0 "
+    value: "-XX:UseSVE=0"
   - name: PROXY_ADDRESS_FORWARDING
     value: "true"
   - name: KC_LOG_LEVEL
-    value: "DEBUG"
+    value: "INFO"
 
 
 livenessProbe:
   enabled: true
-  initialDelaySeconds: 120
-  periodSeconds: 10
+  initialDelaySeconds: 180
+  periodSeconds: 20
   timeoutSeconds: 5
   failureThreshold: 6
-  httpGet: 
+  httpGet:
     path: /health/live
     port: 9000
 
@@ -93,7 +107,7 @@ readinessProbe:
   initialDelaySeconds: 120
   periodSeconds: 10
   timeoutSeconds: 5
-  failureThreshold: 6
+  failureThreshold: 12
   httpGet:
     path: /health/ready
     port: 9000
