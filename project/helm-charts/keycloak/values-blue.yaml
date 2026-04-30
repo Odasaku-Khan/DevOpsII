@@ -1,0 +1,5 @@
+replicaCount: 2
+image:
+  tag: "25.0.1"
+extraLabels:
+  version: blue

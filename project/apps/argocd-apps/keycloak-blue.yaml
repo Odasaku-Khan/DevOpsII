@@ -1,7 +1,7 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: keycloak
+  name: keycloak-blue
   namespace: argocd
 spec:
   project: default
@@ -12,6 +12,7 @@ spec:
     helm:
       valueFiles:
         - values.yaml
+        - values-blue.yaml     # overrides only image tag + version label
   destination:
     server: https://kubernetes.default.svc
     namespace: keycloak
@@ -22,5 +23,3 @@ spec:
     syncOptions:
       - CreateNamespace=true
       - ServerSideApply=true
-      - Validate=false
-      

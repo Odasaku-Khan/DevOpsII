@@ -49,10 +49,7 @@ ingress:
         - path: /
           pathType: Prefix
 
-  tls:
-    - secretName: keycloak-tls
-      hosts:
-        - keycloak.local
+  tls: []
 
 resources: 
   limits:
@@ -125,3 +122,20 @@ httpRoute:
     hostname: "" 
     hostnameStrict: false
   rules: []
+
+blueGreen:
+  enabled: true
+  active: blue
+
+  blue:
+    image:
+      tag: "25.0.1"
+  green:
+    image:
+      tag: "26.0.0"
+
+prometheusRule:
+  enabled: true
+
+serviceMonitor:
+  enabled: true

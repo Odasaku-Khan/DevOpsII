@@ -1,0 +1,27 @@
+{{- if .Values.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "keycloak.fullname" . }}-alerts
+  namespace: monitoring
+  labels:
+    release: prometheus
+spec:
+  groups:
+    - name: keycloak.rules
+      rules:
+        - alert: KeycloakDown
+          expr: kube_deployment_status_replicas_available{namespace="{{ .Release.Namespace }}",deployment="{{ include "keycloak.fullname" . }}-blue"} < 1
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Keycloak has no running replicas"
+        - alert: KeycloakHighMemory
+          expr: container_memory_usage_bytes{namespace="{{ .Release.Namespace }}",container="keycloak"} / 1024 / 1024 > 900
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Keycloak memory over 900Mi"
+{{- end }}

@@ -19,6 +19,9 @@ spec:
     metadata:
       labels:
         {{- include "keycloak.selectorLabels" . | nindent 8 }}
+        {{- with .Values.extraLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
     spec:
       {{- with .Values.podSecurityContext }}
       securityContext:
