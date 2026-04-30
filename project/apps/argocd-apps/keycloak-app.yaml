@@ -13,7 +13,7 @@ spec:
       valueFiles:
         - values.yaml
       parameters:
-        - name: someParameterName  
+        - name: databasePassword  
           valueFrom:
             secretKeyRef:
               name: keycloak-db
