@@ -40,11 +40,9 @@ resources:
 extraEnv: []
 
 podSecurityContext:
-  enabled: true
   fsGroup: 999
 
 containerSecurityContext:
-  enabled: true 
   runAsUser: 999
   runAsGroup: 999
   runAsNonRoot: true
