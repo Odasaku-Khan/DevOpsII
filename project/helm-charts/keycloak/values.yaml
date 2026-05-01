@@ -26,15 +26,6 @@ database:
 
 startMode: "start-dev"
 
-startupProbe:
-  enabled: true
-  initialDelaySeconds: 90
-  periodSeconds: 10
-  timeoutSeconds: 5
-  failureThreshold: 30
-  httpGet:
-    path: /health/live
-    port: 9000
 
 hostname: 
   hostname: ""
@@ -63,11 +54,11 @@ ingress:
 
 resources:
   limits:
-    cpu: 1000m
-    memory: 1536Mi
+    cpu: 1500m
+    memory: 2048Mi
   requests:
-    cpu: 500m
-    memory: 768Mi
+    cpu: 750m
+    memory: 1024Mi
 
 podSecurityContext:
   fsGroup: 1000
@@ -149,3 +140,13 @@ prometheusRule:
 
 serviceMonitor:
   enabled: true
+
+startupProbe:
+  enabled: true
+  initialDelaySeconds: 90
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 30
+  httpGet:
+    path: /health/live
+    port: 9000
