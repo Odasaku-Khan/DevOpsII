@@ -671,6 +671,33 @@
         join_command: "{{ join_command.stdout }}"
       run_once: true
 
+    - name: Install metrics-server manifest
+      shell: |
+        kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+      run_once: true
+
+    - name: Patch metrics-server for kubeadm/Vagrant TLS
+      shell: |
+        kubectl patch deployment metrics-server -n kube-system \
+          --type='json' \
+          -p='[
+            {
+              "op":"add",
+              "path":"/spec/template/spec/containers/0/args/-",
+              "value":"--kubelet-insecure-tls"
+            },
+            {
+              "op":"add",
+              "path":"/spec/template/spec/containers/0/args/-",
+              "value":"--kubelet-preferred-address-types=InternalIP,Hostname,ExternalIP"
+            }
+          ]' || true
+      run_once: true
+
+    - name: Wait for metrics-server rollout
+      shell: kubectl rollout status deployment metrics-server -n kube-system --timeout=180s
+      run_once: true
+
     - name: Install ArgoCD
       shell: |
         kubectl create namespace argocd || true
