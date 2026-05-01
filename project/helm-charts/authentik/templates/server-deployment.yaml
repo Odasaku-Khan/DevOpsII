@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "authentik.fullname" . }}-server
+  labels:
+    {{- include "authentik.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+    {{- with .Values.extraLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "authentik.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: server
+  template:
+    metadata:
+      labels:
+        {{- include "authentik.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: server
+        {{- with .Values.extraLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      containers:
+        - name: server
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - {{ .Values.server.command | quote }}
+          ports:
+            - name: http
+              containerPort: 9000
+          env:
+            - name: AUTHENTIK_POSTGRESQL__HOST
+              value: {{ .Values.authentik.postgresql.host | quote }}
+            - name: AUTHENTIK_POSTGRESQL__PORT
+              value: {{ .Values.authentik.postgresql.port | quote }}
+            - name: AUTHENTIK_POSTGRESQL__NAME
+              value: {{ .Values.authentik.postgresql.name | quote }}
+            - name: AUTHENTIK_POSTGRESQL__USER
+              value: {{ .Values.authentik.postgresql.user | quote }}
+            - name: AUTHENTIK_POSTGRESQL__PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "authentik.fullname" . }}-secret
+                  key: AUTHENTIK_POSTGRESQL__PASSWORD
+            - name: AUTHENTIK_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "authentik.fullname" . }}-secret
+                  key: AUTHENTIK_SECRET_KEY
+          readinessProbe:
+            httpGet:
+              path: /-/health/ready/
+              port: 9000
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /-/health/live/
+              port: 9000
+            initialDelaySeconds: 120
+            periodSeconds: 20
+            failureThreshold: 6
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
