@@ -34,7 +34,7 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: keycloak-allow-egress-to-postgres
+  name: keycloak-allow-postgres-egress
   namespace: keycloak
 spec:
   podSelector:

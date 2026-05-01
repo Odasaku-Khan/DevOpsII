@@ -1,15 +1,15 @@
 replicaCount: 2
-
 image:
   tag: "25.0.1"
-
 extraLabels:
   version: blue
-
 admin:
   existingSecret: "keycloak-admin"
-
 database:
   existingSecret: "keycloak-db"
-
 nodeSelector: {}
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 70
