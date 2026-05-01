@@ -1,0 +1,6 @@
+apiVersion: v2
+name: authentik
+description: Lightweight Authentik identity provider connected to external PostgreSQL
+type: application
+version: 0.1.0
+appVersion: "2025.10.4"
