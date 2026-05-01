@@ -53,6 +53,16 @@ spec:
                 secretKeyRef:
                   name: {{ include "authentik.fullname" . }}-secret
                   key: AUTHENTIK_SECRET_KEY
+            - name: AUTHENTIK_BOOTSTRAP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "authentik.fullname" . }}-secret
+                  key: AUTHENTIK_BOOTSTRAP_PASSWORD
+            - name: AUTHENTIK_BOOTSTRAP_EMAIL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "authentik.fullname" . }}-secret
+                  key: AUTHENTIK_BOOTSTRAP_EMAIL
           readinessProbe:
             httpGet:
               path: /-/health/ready/

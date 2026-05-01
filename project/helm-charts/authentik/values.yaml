@@ -6,7 +6,7 @@ image:
   pullPolicy: IfNotPresent
 
 authentik:
-  ecretKey: "645KillerS"
+  secretKey: "645KillerS"
 
   bootstrap:
     password: "admin12345"
