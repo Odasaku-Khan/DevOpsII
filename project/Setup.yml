@@ -162,8 +162,14 @@
           - lsb-release
           - open-iscsi
           - util-linux
+          - nfs-common
         state: present
         update_cache: yes
+
+    - name: Load iscsi_tcp module
+      modprobe:
+        name: iscsi_tcp
+        state: present
 
     - name: Enable and start iscsid service
       systemd:
@@ -235,6 +241,13 @@
         state: present
         update_cache: yes
 
+    - name: Set kubelet node IP
+      copy:
+        dest: /etc/default/kubelet
+        content: |
+          KUBELET_EXTRA_ARGS=--node-ip={{ ansible_host }}
+      notify: Restart kubelet
+
     - name: Hold kubeadm, kubelet, kubectl at current version
       dpkg_selections:
         name: "{{ item }}"
@@ -251,6 +264,12 @@
       systemd:
         name: containerd
         state: restarted
+
+    - name: Restart kubelet
+      systemd:
+        name: kubelet
+        state: restarted
+        daemon_reload: yes
 
 
 - name: Move etc on DB node
@@ -455,6 +474,32 @@
           --config=/tmp/etcd-cert-config.yaml
       when: not etcd_certs_exist.stat.exists
 
+    - name: Ensure etcd group exists on db
+      group:
+        name: etcd
+        state: present
+      delegate_to: db
+
+    - name: Ensure etcd user exists on db
+      user:
+        name: etcd
+        group: etcd
+        shell: /usr/sbin/nologin
+        system: yes
+        create_home: no
+        state: present
+      delegate_to: db
+
+    - name: Create etcd config dir on db
+      file:
+        path: /etc/etcd
+        state: directory
+        mode: '0755'
+        owner: root
+        group: root
+      delegate_to: db
+
+
     - name: Create etcd pki dir on db
       file:
         path: /etc/etcd/pki
@@ -639,10 +684,14 @@
       ignore_errors: yes
 
     - name: Install ArgoCD CLI
-      shell: |
-        curl -sSL -o /usr/local/bin/argocd \
-        https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
-        chmod +x /usr/local/bin/argocd
+      get_url:
+        url: https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-arm64
+        dest: /usr/local/bin/argocd
+        mode: '0755'
+        force: no
+      retries: 3
+      delay: 5
+      
     - name: Expose ArgoCD via NodePort
       shell: |
         kubectl patch svc argocd-server -n argocd \
@@ -705,25 +754,18 @@
     - name: Label worker node
       shell: kubectl label node worker node-role=worker --overwrite
 
-    - name: Install Longhorn on db node
+    - name: Install Longhorn from official manifest
       shell: |
-        helm repo add longhorn https://charts.longhorn.io
-        helm repo update
-        helm install longhorn longhorn/longhorn \
-          --namespace longhorn-system --create-namespace \
-          --set longhornManager.nodeSelector."node-role"=storage 
+        kubectl apply -f https://raw.githubusercontent.com/longhorn/longhorn/v1.11.1/deploy/longhorn.yaml
+      args:
+        creates: /tmp/longhorn-installed
+      register: longhorn_apply
 
-    - name: Install PostgreSQL on db node
-      shell: |
-        helm repo add Odasaku-Khan https://odasaku-khan.github.io/DevOpsII/
-        helm repo update
-        helm install my-postgresql Odasaku-Khan/postgresql \
-          --set nodeSelector."node-role"=storage
+    - name: Mark Longhorn as installed
+      file:
+        path: /tmp/longhorn-installed
+        state: touch
 
-    - name: Install Keycloak on worker node
-      shell: |
-        helm install my-keycloak Odasaku-Khan/keycloak \
-          --set nodeSelector."node-role"=worker
 
     - name: Install full observability stack (Prometheus + Loki + Grafana)
       shell: |
