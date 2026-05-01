@@ -88,3 +88,33 @@ serviceAccount:
 
 media:
   enabled: true
+
+startupProbe:
+  enabled: true
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 30
+  httpGet:
+    path: /-/health/live/
+    port: 9000
+
+readinessProbe:
+  enabled: true
+  initialDelaySeconds: 120
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 18
+  httpGet:
+    path: /-/health/ready/
+    port: 9000
+
+livenessProbe:
+  enabled: true
+  initialDelaySeconds: 240
+  periodSeconds: 20
+  timeoutSeconds: 5
+  failureThreshold: 6
+  httpGet:
+    path: /-/health/live/
+    port: 9000
