@@ -4,7 +4,7 @@ metadata:
   name: authentik
   namespace: authentik
 spec:
-  type: ClusterIP
+  type: NodePort
   selector:
     app.kubernetes.io/name: authentik
     app.kubernetes.io/component: server
@@ -14,3 +14,4 @@ spec:
       port: 80
       targetPort: 9000
       protocol: TCP
+      nodePort: 30080

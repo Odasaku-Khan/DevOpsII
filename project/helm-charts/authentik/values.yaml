@@ -6,7 +6,13 @@ image:
   pullPolicy: IfNotPresent
 
 authentik:
-  secretKey: "645KillerS"
+  ecretKey: "645KillerS"
+
+  bootstrap:
+    password: "admin12345"
+    email: "admin@authentik.local"
+    token: "devops-final-token"
+
   postgresql:
     host: "postgres-postgresql.postgres.svc.cluster.local"
     port: 5432

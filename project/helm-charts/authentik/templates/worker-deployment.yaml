@@ -1,3 +1,4 @@
+
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -48,6 +49,21 @@ spec:
                 secretKeyRef:
                   name: {{ include "authentik.fullname" . }}-secret
                   key: AUTHENTIK_SECRET_KEY
+            - name: AUTHENTIK_BOOTSTRAP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "authentik.fullname" . }}-secret
+                  key: AUTHENTIK_BOOTSTRAP_PASSWORD
+            - name: AUTHENTIK_BOOTSTRAP_EMAIL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "authentik.fullname" . }}-secret
+                  key: AUTHENTIK_BOOTSTRAP_EMAIL
+            - name: AUTHENTIK_BOOTSTRAP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "authentik.fullname" . }}-secret
+                  key: AUTHENTIK_BOOTSTRAP_TOKEN
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       {{- with .Values.nodeSelector }}
