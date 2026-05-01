@@ -1,4 +1,4 @@
-replicaCount: 2
+replicaCount: 1
 image:
   tag: "25.0.1"
 extraLabels:
@@ -10,6 +10,6 @@ database:
 nodeSelector: {}
 autoscaling:
   enabled: true
-  minReplicas: 2
-  maxReplicas: 4
+  minReplicas: 1
+  maxReplicas: 2
   targetCPUUtilizationPercentage: 70
