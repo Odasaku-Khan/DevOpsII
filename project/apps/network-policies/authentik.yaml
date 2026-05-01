@@ -8,39 +8,49 @@ spec:
   policyTypes:
     - Ingress
     - Egress
+
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: authentik-allow-dns
-  namespace: authentik
-spec:
-  podSelector: {}
-  policyTypes:
-    - Egress
-  egress:
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: kube-system
-      ports:
-        - protocol: UDP
-          port: 53
-        - protocol: TCP
-          port: 53
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: authentik-allow-postgres
+  name: authentik-allow-required
   namespace: authentik
 spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/name: authentik
   policyTypes:
+    - Ingress
     - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: authentik
+
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: haproxy-system
+      ports:
+        - protocol: TCP
+          port: 9000
+
+    - from:
+        - ipBlock:
+            cidr: 192.168.56.0/24
+        - ipBlock:
+            cidr: 10.0.0.0/8
+      ports:
+        - protocol: TCP
+          port: 9000
+
   egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: authentik
+
     - to:
         - namespaceSelector:
             matchLabels:
@@ -51,93 +61,13 @@ spec:
       ports:
         - protocol: TCP
           port: 5432
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: authentik-allow-haproxy-ingress
-  namespace: authentik
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/name: authentik
-      app.kubernetes.io/component: server
-  policyTypes:
-    - Ingress
-  ingress:
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: haproxy-system
-      ports:
-        - protocol: TCP
-          port: 9000
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: authentik-allow-nodeport-healthchecks
-  namespace: authentik
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/name: authentik
-      app.kubernetes.io/component: server
-  policyTypes:
-    - Ingress
-  ingress:
-    - from:
-        - ipBlock:
-            cidr: 192.168.56.0/24
-      ports:
-        - protocol: TCP
-          port: 9000
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: authentik-allow-monitoring-scrape
-  namespace: authentik
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/name: authentik
-  policyTypes:
-    - Ingress
-  ingress:
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: monitoring
-      ports:
-        - protocol: TCP
-          port: 9000
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: authentik-allow-internal
-  namespace: authentik
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/name: authentik
-  policyTypes:
-    - Ingress
-    - Egress
-  ingress:
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: authentik
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: authentik
-  egress:
+
     - to:
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: authentik
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: authentik
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
