@@ -35,6 +35,9 @@ spec:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           args:
             - {{ .Values.worker.command | quote }}
+          volumeMounts:
+            - name: media
+              mountPath: /media
           env:
             - name: AUTHENTIK_POSTGRESQL__HOST
               value: {{ .Values.authentik.postgresql.host | quote }}
@@ -71,6 +74,9 @@ spec:
                   key: AUTHENTIK_BOOTSTRAP_TOKEN
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: media
+          emptyDir: {}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

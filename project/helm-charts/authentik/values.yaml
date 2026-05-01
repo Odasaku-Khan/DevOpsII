@@ -67,11 +67,15 @@ tolerations: []
 affinity: {}
 
 podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
   fsGroup: 1000
   seccompProfile:
     type: RuntimeDefault
 
 containerSecurityContext:
+  runAsNonRoot: true
   allowPrivilegeEscalation: false
   privileged: false
   readOnlyRootFilesystem: false
@@ -80,5 +84,7 @@ containerSecurityContext:
       - ALL
 
 serviceAccount:
-  create: true
   automount: false
+
+media:
+  enabled: true
