@@ -1,0 +1,12 @@
+apiVersion: longhorn.io/v1beta2
+kind: RecurringJob
+metadata:
+  name: postgres-hourly-snapshot
+  namespace: longhorn-system
+spec:
+  cron: "0 * * * *"
+  task: "snapshot"
+  groups:
+    - postgres
+  retain: 3
+  concurrency: 1
