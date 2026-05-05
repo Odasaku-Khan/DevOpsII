@@ -1,0 +1,22 @@
+grafana:
+  additionalDataSources:
+  - access: proxy
+    name: Prometheus
+    type: prometheus
+    url: http://prometheus-kube-prometheus-prometheus.monitoring.svc:9090
+  enabled: true
+  nodeSelector:
+    node-role: worker
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+    datasources:
+      enabled: true
+loki:
+  persistence:
+    enabled: true
+    size: 5Gi
+    storageClassName: longhorn
+promtail:
+  enabled: true

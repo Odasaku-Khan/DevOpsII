@@ -568,6 +568,9 @@
       delegate_to: db
       when: not kubeadm_init_done.stat.exists
 
+    - name: Wait for etcd data directory to be ready
+      command: sleep 10 
+
     - name: Ensure etcd service is started on db node
       systemd:
         name: etcd
@@ -695,8 +698,9 @@
       run_once: true
 
     - name: Wait for metrics-server rollout
-      shell: kubectl rollout status deployment metrics-server -n kube-system --timeout=180s
+      shell: kubectl rollout status deployment metrics-server -n kube-system --timeout=300s
       run_once: true
+      ignore_errors: yes
 
     - name: Install ArgoCD
       shell: |
@@ -734,11 +738,6 @@
       debug:
         msg: "ArgoCD admin password: {{ argocd_admin_password.stdout }}"
 
-    - name: Boostrap ArgoCD with a sample application
-      shell: |
-        kubectl apply -f https://raw.githubusercontent.com/Odasaku-Khan/DevOpsII/main/project/apps/app-of-apps.yaml
-      run_once: true
-    
 
 - name: Setup for DB node
   hosts: db
@@ -822,3 +821,9 @@
           --set grafana.sidecar.dashboards.enabled=true \
           --set grafana.sidecar.dashboards.label=grafana_dashboard
       run_once: true
+
+    - name: Boostrap ArgoCD with a app of applications
+      shell: |
+        kubectl apply -f https://raw.githubusercontent.com/Odasaku-Khan/DevOpsII/main/project/apps/app-of-apps.yaml
+      run_once: true
+    

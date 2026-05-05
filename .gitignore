@@ -2,7 +2,11 @@
 terraform.tfstate*
 .terraform/
 terraform.json
-
+.DS_Store
+storage-*
+xlam.yml
+tls.crt
+kubeconfig
 # Ansible
 *.retry
 
