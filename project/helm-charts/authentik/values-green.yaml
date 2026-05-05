@@ -11,11 +11,11 @@ worker:
 
 authentik:
   postgresql:
-    host: "postgres-postgresql.postgres.svc.cluster.local"
-    port: 5432
-    name: "authentik_green"
-    user: "authentik"
-    password: "authentik"
+    host: postgres-postgresql.postgres.svc.cluster.local
+    port: "5432"
+    user: authentik
+    password: authentik
+    name: authentik_green
 
 autoscaling:
   enabled: true

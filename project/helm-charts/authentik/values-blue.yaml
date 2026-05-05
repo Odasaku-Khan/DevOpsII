@@ -8,11 +8,11 @@ extraLabels:
 
 authentik:
   postgresql:
-    host: "postgres-postgresql.postgres.svc.cluster.local"
-    port: 5432
-    name: "authentik_blue"
-    user: "authentik"
-    password: "authentik"
+    host: postgres-postgresql.postgres.svc.cluster.local
+    port: "5432"
+    user: authentik
+    password: authentik
+    name: authentik_blue
 
 worker:
   replicaCount: 1
