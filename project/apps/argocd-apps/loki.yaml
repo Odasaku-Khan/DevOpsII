@@ -13,7 +13,7 @@ spec:
       helm:
         releaseName: loki
         valueFiles:
-          - $values/helm-values/loki-values.yaml
+          - $values/project/helm-values/loki-values.yaml
 
     - repoURL: https://github.com/Odasaku-Khan/DevOpsII.git
       targetRevision: main

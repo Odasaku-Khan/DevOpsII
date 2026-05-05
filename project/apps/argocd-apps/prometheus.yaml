@@ -13,8 +13,7 @@ spec:
       helm:
         releaseName: prometheus
         valueFiles:
-          - $values/helm-values/prometheus-values.yaml
-
+          - $values/project/helm-values/prometheus-values.yaml
     - repoURL: https://github.com/Odasaku-Khan/DevOpsII.git
       targetRevision: main
       ref: values
