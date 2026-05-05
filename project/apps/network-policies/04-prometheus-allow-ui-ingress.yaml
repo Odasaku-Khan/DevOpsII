@@ -17,7 +17,7 @@ spec:
     - from:
         - namespaceSelector:
             matchLabels:
-              name: haproxy-controller
+              name: haproxy-system
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: grafana
