@@ -78,11 +78,10 @@ spec:
                 secretKeyRef:
                   name: {{ include "authentik.fullname" . }}-secret
                   key: AUTHENTIK_BOOTSTRAP_EMAIL
-
             - name: AUTHENTIK_BOOTSTRAP_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "authentik.fullname" . }}-secret
+                  name: "{{ include "authentik.fullname" . }}-secret"
                   key: AUTHENTIK_BOOTSTRAP_TOKEN
           readinessProbe:
             httpGet:

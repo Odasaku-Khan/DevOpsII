@@ -1,4 +1,3 @@
-
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -38,7 +37,7 @@ spec:
           volumeMounts:
             - name: media
               mountPath: /media
-                    env:
+          env:
             - name: AUTHENTIK_POSTGRESQL__HOST
               value: {{ .Values.authentik.postgresql.host | quote }}
 
@@ -54,37 +53,40 @@ spec:
             - name: AUTHENTIK_POSTGRESQL__PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "authentik.fullname" . }}-secret
+                  name: "{{ include "authentik.fullname" . }}-secret"
                   key: AUTHENTIK_POSTGRESQL__PASSWORD
 
             - name: AUTHENTIK_SECRET_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "authentik.fullname" . }}-secret
+                  name: "{{ include "authentik.fullname" . }}-secret"
                   key: AUTHENTIK_SECRET_KEY
 
             - name: AUTHENTIK_BOOTSTRAP_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "authentik.fullname" . }}-secret
+                  name: "{{ include "authentik.fullname" . }}-secret"
                   key: AUTHENTIK_BOOTSTRAP_PASSWORD
 
             - name: AUTHENTIK_BOOTSTRAP_EMAIL
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "authentik.fullname" . }}-secret
+                  name: "{{ include "authentik.fullname" . }}-secret"
                   key: AUTHENTIK_BOOTSTRAP_EMAIL
 
             - name: AUTHENTIK_BOOTSTRAP_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "authentik.fullname" . }}-secret
+                  name: "{{ include "authentik.fullname" . }}-secret"
                   key: AUTHENTIK_BOOTSTRAP_TOKEN
+
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+
       volumes:
         - name: media
           emptyDir: {}
+
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
