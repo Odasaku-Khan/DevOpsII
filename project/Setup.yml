@@ -801,14 +801,14 @@
 
         helm upgrade --install prometheus prometheus-community/kube-prometheus-stack \
           --namespace monitoring --create-namespace \
-          --set prometheus.prometheusSpec.nodeSelector."node-role"=worker \
+          --set prometheus.prometheusSpec.nodeSelector."node-role"=master \
           --set grafana.enabled=false \
           --set alertmanager.enabled=false
 
         helm upgrade --install loki grafana/loki-stack \
           --namespace monitoring \
           --set grafana.enabled=true \
-          --set grafana.nodeSelector."node-role"=worker \
+          --set grafana.nodeSelector."node-role"=master \
           --set promtail.enabled=true \
           --set loki.persistence.enabled=true \
           --set loki.persistence.storageClassName=longhorn \

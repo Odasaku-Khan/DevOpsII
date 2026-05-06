@@ -6,7 +6,7 @@ grafana:
     url: http://prometheus-kube-prometheus-prometheus.monitoring.svc:9090
   enabled: true
   nodeSelector:
-    node-role: worker
+    node-role: master
   sidecar:
     dashboards:
       enabled: true
