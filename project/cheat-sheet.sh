@@ -36,3 +36,36 @@ kubectl scale deployment authentik-green-server -n authentik --replicas=0
 kubectl scale deployment authentik-green-worker -n authentik --replicas=0
 
 kubectl get endpoints authentik -n authentik
+
+kubectl patch svc authentik-blue -n authentik --type='merge' -p='
+{
+  "spec": {
+    "selector": {
+      "app.kubernetes.io/name": "authentik",
+      "app.kubernetes.io/component": "server",
+      "app.kubernetes.io/instance": "authentik-blue"
+    }
+  }
+}'
+
+kubectl patch svc authentik-green -n authentik --type='merge' -p='
+{
+  "spec": {
+    "selector": {
+      "app.kubernetes.io/name": "authentik",
+      "app.kubernetes.io/component": "server",
+      "app.kubernetes.io/instance": "authentik-green"
+    }
+  }
+}'
+
+kubectl patch svc authentik -n authentik --type='merge' -p='
+{
+  "spec": {
+    "selector": {
+      "app.kubernetes.io/name": "authentik",
+      "app.kubernetes.io/component": "server",
+      "app.kubernetes.io/instance": "authentik-green"
+    }
+  }
+}'
