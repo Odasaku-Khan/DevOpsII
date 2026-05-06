@@ -5,4 +5,4 @@ grafana:
 prometheus:
   prometheusSpec:
     nodeSelector:
-      node-role: master
+      node-role: worker
