@@ -1,144 +1,162 @@
-- name: Lab 12 
+---
+- name: Lab 12 - Extending Kubernetes
   hosts: all
-  become: yes
-  environment:
-    KUBECONFIG: /etc/kubernetes/admin.conf
-  tasks:
+  become: true
 
+  vars:
+    kube_version_repo: "v1.30"
+    pod_network_cidr: "192.168.0.0/16"
+    kube_apiserver_ip: "192.168.56.10"
+
+    operator_dir: "/home/vagrant/namespace-operator"
+    operator_image: "namespace-operator:latest"
+    operator_deployment: "namespace-operator"
+    operator_namespace: "kube-system"
+
+    test_namespace: "team-alpha"
+
+  tasks:
     - name: Wait for cloud-init
-      shell: cloud-init status --wait
-      args:
-        executable: /bin/bash
+      shell: cloud-init status --wait || true
+      changed_when: false
 
     - name: Install ca-certificates
       apt:
-        name: ca-certificates
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+          - apt-transport-https
         state: present
-
-    - name: Fix Ubuntu ports mirror to HTTPS
-      replace:
-        path: /etc/apt/sources.list
-        regexp: 'http://ports.ubuntu.com'
-        replace: 'https://ports.ubuntu.com'
-
-    - name: apt update
-      apt:
-        update_cache: yes
+        update_cache: true
 
     - name: Disable swap if enabled
-      shell: |
-        if swapon --summary | grep -q '^'; then
-          swapoff -a
-        fi
+      shell: swapoff -a
+      changed_when: false
 
     - name: Permanently disable swap
       replace:
         path: /etc/fstab
-        regexp: '^([^#].*?\sswap\s+.*)$'
+        regexp: '^([^#].*\sswap\s.*)$'
         replace: '# \1'
 
     - name: Install system dependencies
       apt:
         name:
-          - apt-transport-https
-          - curl
-          - gnupg
-          - lsb-release
-          - nfs-common
-          - open-iscsi
-          - python3-pip
+          - containerd
           - docker.io
-
+          - conntrack
+          - socat
+          - ebtables
+          - ethtool
+          - iproute2
+          - iptables
+          - python3
+          - python3-pip
         state: present
-
-    - name: Enable iscsid
-      systemd:
-        name: iscsid
-        state: started
-        enabled: yes
+        update_cache: true
 
     - name: Enable docker
       systemd:
         name: docker
+        enabled: true
         state: started
-        enabled: yes
 
-    - name: Install containerd
-      apt:
+    - name: Enable containerd
+      systemd:
         name: containerd
-        state: present
+        enabled: true
+        state: started
 
-    - name: Create ContainerD config
-      shell: |
-        mkdir -p /etc/containerd
-        containerd config default > /etc/containerd/config.toml 
-        sed -i "s/SystemdCgroup = false/SystemdCgroup = true/g" /etc/containerd/config.toml 
-      notify: Restart ContainerD
+    - name: Create containerd config directory
+      file:
+        path: /etc/containerd
+        state: directory
+        mode: "0755"
+
+    - name: Generate default containerd config
+      shell: containerd config default > /etc/containerd/config.toml
+      changed_when: true
+
+    - name: Enable SystemdCgroup for containerd
+      replace:
+        path: /etc/containerd/config.toml
+        regexp: 'SystemdCgroup = false'
+        replace: 'SystemdCgroup = true'
+
+    - name: Restart containerd after config change
+      systemd:
+        name: containerd
+        state: restarted
+        enabled: true
 
     - name: Load br_netfilter
       modprobe:
         name: br_netfilter
         state: present
 
-    - name: Br_netfilter load on boot
+    - name: Load overlay
+      modprobe:
+        name: overlay
+        state: present
+
+    - name: Persist Kubernetes kernel modules
       copy:
         dest: /etc/modules-load.d/k8s.conf
         content: |
+          overlay
           br_netfilter
 
-    - name: sysctl for Kubernetes
+    - name: Configure sysctl for Kubernetes
       copy:
         dest: /etc/sysctl.d/k8s.conf
         content: |
+          net.bridge.bridge-nf-call-iptables = 1
           net.bridge.bridge-nf-call-ip6tables = 1
-          net.bridge.bridge-nf-call-iptables  = 1
-          net.ipv4.ip_forward                 = 1
-      notify: Reload sysctl
+          net.ipv4.ip_forward = 1
 
     - name: Apply sysctl now
-      command: sysctl --system
+      shell: sysctl --system
+      changed_when: false
 
     - name: Force Google DNS
-      lineinfile:
-        path: /etc/resolv.conf
-        line: "nameserver 8.8.8.8"
-        insertbefore: BOF
+      copy:
+        dest: /etc/systemd/resolved.conf
+        content: |
+          [Resolve]
+          DNS=8.8.8.8 1.1.1.1
+          FallbackDNS=8.8.4.4
 
+    - name: Restart systemd-resolved
+      systemd:
+        name: systemd-resolved
+        state: restarted
+        enabled: true
 
-    - name: Make keyrings directory 
+    - name: Make keyrings directory
       file:
         path: /etc/apt/keyrings
         state: directory
-        mode: '0755'
+        mode: "0755"
 
-    - name: Add Kubernetes GPG key 
+    - name: Add Kubernetes GPG key
       shell: |
-        curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.35/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/{{ kube_version_repo }}/deb/Release.key \
+          | gpg --dearmor --yes -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
       args:
         creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
 
     - name: Add Kubernetes apt repository
       copy:
         dest: /etc/apt/sources.list.d/kubernetes.list
-        content: 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.35/deb/ /'
+        content: |
+          deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/{{ kube_version_repo }}/deb/ /
 
     - name: Update apt cache after adding Kubernetes repo
       apt:
-        update_cache: yes
+        update_cache: true
 
     - name: Install kubeadm, kubelet, kubectl
-      apt:
-        name:
-          - kubeadm
-          - kubelet 
-          - kubectl
-        state: present
-
-    - name: apt update after k8s repo
-      apt:
-        update_cache: yes
-
-    - name: Install kubeadm kubelet kubectl
       apt:
         name:
           - kubeadm
@@ -146,170 +164,507 @@
           - kubectl
         state: present
 
-    - name: Hold k8s packages
+    - name: Hold Kubernetes packages
       dpkg_selections:
         name: "{{ item }}"
         selection: hold
-      loop: [kubeadm, kubelet, kubectl]
+      loop:
+        - kubeadm
+        - kubelet
+        - kubectl
 
     - name: Pre-pull kubeadm images
-      command: kubeadm config images pull
+      shell: kubeadm config images pull --cri-socket unix:///run/containerd/containerd.sock
+      changed_when: false
+
+    - name: Initialize Kubernetes cluster with kubeadm
+      shell: |
+        kubeadm init \
+          --apiserver-advertise-address={{ kube_apiserver_ip }} \
+          --pod-network-cidr={{ pod_network_cidr }} \
+          --cri-socket unix:///run/containerd/containerd.sock
       args:
         creates: /etc/kubernetes/admin.conf
 
-    - name: Cluster initialization with kubeadm
-      command: kubeadm init --pod-network-cidr=10.244.0.0/16 --apiserver-advertise-address=192.168.56.10
-      args:
-        creates: /etc/kubernetes/admin.conf
-      run_once: true
-
-    - name: .kube for root
+    - name: Create .kube directory for root
       file:
         path: /root/.kube
         state: directory
-        mode: '0755'
-
-
-    - name: Create .kube directory for root
-      ansible.builtin.file:
-        path: /root/.kube
-        state: directory
-        mode: '0755'
+        mode: "0700"
 
     - name: Copy admin.conf to root kubeconfig
-      ansible.builtin.copy:
+      copy:
         src: /etc/kubernetes/admin.conf
         dest: /root/.kube/config
-        remote_src: yes
-        owner: root
-        group: root
-        mode: '0600'
+        remote_src: true
+        mode: "0600"
 
     - name: Create .kube directory for vagrant
-      ansible.builtin.file:
+      file:
         path: /home/vagrant/.kube
         state: directory
         owner: vagrant
         group: vagrant
-        mode: '0755'
+        mode: "0755"
+
+    - name: Copy admin.conf to vagrant kubeconfig
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /home/vagrant/.kube/config
+        remote_src: true
+        owner: vagrant
+        group: vagrant
+        mode: "0600"
 
     - name: Remove control-plane taint
-      shell: kubectl taint nodes --all node-role.kubernetes.io/control-plane- || true
+      shell: |
+        kubectl taint nodes --all node-role.kubernetes.io/control-plane- || true
+        kubectl taint nodes --all node-role.kubernetes.io/master- || true
+      changed_when: false
 
     - name: Install Calico CNI
-      shell: |
-        kubectl apply -f https://docs.projectcalico.org/manifests/calico.yaml
-        kubectl set env daemonset/calico-node -n kube-system \
-          IP_AUTODETECTION_METHOD=interface=eth1 \
-          CALICO_IPV4POOL_CIDR=10.244.0.0/16 || true
-      run_once: true
+      shell: kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.28.2/manifests/calico.yaml
+      changed_when: false
 
     - name: Wait for node ready
-      shell: kubectl wait --for=condition=Ready nodes --all --timeout=300s
-      ignore_errors: yes
-
+      shell: kubectl wait --for=condition=Ready nodes --all --timeout=240s
+      changed_when: false
 
     - name: Create operator build directory
       file:
-        path: /home/vagrant/namespace-operator
+        path: "{{ operator_dir }}"
         state: directory
         owner: vagrant
         group: vagrant
+        mode: "0755"
+
+    - name: Write operator requirements.txt
+      copy:
+        dest: "{{ operator_dir }}/requirements.txt"
+        owner: vagrant
+        group: vagrant
+        mode: "0644"
+        content: |
+          kopf==1.37.4
+          kubernetes==29.0.0
 
     - name: Write operator.py
       copy:
-        dest: /home/vagrant/namespace-operator/operator.py
+        dest: "{{ operator_dir }}/operator.py"
+        owner: vagrant
+        group: vagrant
+        mode: "0644"
         content: |
           import kopf
           import kubernetes
+          from kubernetes import client, config
+          from kubernetes.client.rest import ApiException
 
-          SKIP = {'default', 'kube-system', 'kube-public', 'kube-node-lease'}
 
-          @kopf.on.create('namespaces')
-          def on_namespace_create(name, logger, **kwargs):
-              if name in SKIP or name.startswith('kube-'):
-                  logger.info(f"Skipping system namespace: {name}")
-                  return
+          SYSTEM_NAMESPACES = {
+              "default",
+              "kube-system",
+              "kube-public",
+              "kube-node-lease",
+          }
 
-              kubernetes.config.load_incluster_config()
-              rbac = kubernetes.client.RbacAuthorizationV1Api()
 
-              bindings = [
-                  (f"{name}:viewers", "view",  f"{name}:viewers"),
-                  (f"{name}:editors", "edit",  f"{name}:editors"),
-                  (f"{name}:admins",  "admin", f"{name}:admins"),
-              ]
+          def load_config():
+              try:
+                  config.load_incluster_config()
+              except Exception:
+                  config.load_kube_config()
 
-              for binding_name, cluster_role, group_name in bindings:
-                  body = kubernetes.client.V1RoleBinding(
-                      metadata=kubernetes.client.V1ObjectMeta(
-                          name=binding_name,
-                          namespace=name,
-                          annotations={"managed-by": "namespace-operator"},
-                      ),
-                      role_ref=kubernetes.client.V1RoleRef(
-                          api_group="rbac.authorization.k8s.io",
-                          kind="ClusterRole",
-                          name=cluster_role,
-                      ),
-                      subjects=[kubernetes.client.V1Subject(
+
+          load_config()
+
+          core = client.CoreV1Api()
+          rbac = client.RbacAuthorizationV1Api()
+
+
+          @kopf.on.startup()
+          def configure(settings: kopf.OperatorSettings, **kwargs):
+              settings.persistence.finalizer = None
+              settings.posting.enabled = True
+
+
+          def create_or_patch_role(namespace: str, role_name: str, rules: list, logger):
+              role = client.V1Role(
+                  metadata=client.V1ObjectMeta(
+                      name=role_name,
+                      namespace=namespace,
+                      labels={
+                          "app.kubernetes.io/managed-by": "namespace-operator",
+                          "lab": "lab12",
+                      },
+                  ),
+                  rules=rules,
+              )
+
+              try:
+                  rbac.create_namespaced_role(namespace=namespace, body=role)
+                  logger.info(f"Created Role {role_name} in namespace {namespace}")
+              except ApiException as e:
+                  if e.status == 409:
+                      rbac.patch_namespaced_role(
+                          name=role_name,
+                          namespace=namespace,
+                          body=role,
+                      )
+                      logger.info(f"Patched existing Role {role_name} in namespace {namespace}")
+                  else:
+                      raise
+
+
+          def create_or_patch_rolebinding(
+              namespace: str,
+              rolebinding_name: str,
+              role_name: str,
+              group_name: str,
+              logger,
+          ):
+              rolebinding = client.V1RoleBinding(
+                  metadata=client.V1ObjectMeta(
+                      name=rolebinding_name,
+                      namespace=namespace,
+                      labels={
+                          "app.kubernetes.io/managed-by": "namespace-operator",
+                          "lab": "lab12",
+                      },
+                  ),
+                  subjects=[
+                      client.V1Subject(
                           kind="Group",
                           name=group_name,
                           api_group="rbac.authorization.k8s.io",
-                      )],
+                      )
+                  ],
+                  role_ref=client.V1RoleRef(
+                      kind="Role",
+                      name=role_name,
+                      api_group="rbac.authorization.k8s.io",
+                  ),
+              )
+
+              try:
+                  rbac.create_namespaced_role_binding(
+                      namespace=namespace,
+                      body=rolebinding,
                   )
-                  try:
-                      rbac.create_namespaced_role_binding(namespace=name, body=body)
-                      logger.info(f"Created RoleBinding {binding_name} in {name}")
-                  except kubernetes.client.exceptions.ApiException as e:
-                      if e.status == 409:
-                          logger.info(f"RoleBinding {binding_name} already exists")
-                      else:
-                          raise
+                  logger.info(f"Created RoleBinding {rolebinding_name} in namespace {namespace}")
+              except ApiException as e:
+                  if e.status == 409:
+                      rbac.patch_namespaced_role_binding(
+                          name=rolebinding_name,
+                          namespace=namespace,
+                          body=rolebinding,
+                      )
+                      logger.info(f"Patched existing RoleBinding {rolebinding_name} in namespace {namespace}")
+                  else:
+                      raise
+
+
+          def ensure_namespace_rbac(namespace: str, logger):
+              if namespace in SYSTEM_NAMESPACES:
+                  logger.info(f"Skipping system namespace {namespace}")
+                  return
+
+              view_rules = [
+                  client.V1PolicyRule(
+                      api_groups=["", "apps", "batch"],
+                      resources=[
+                          "pods",
+                          "pods/log",
+                          "services",
+                          "configmaps",
+                          "deployments",
+                          "replicasets",
+                          "statefulsets",
+                          "daemonsets",
+                          "jobs",
+                          "cronjobs",
+                      ],
+                      verbs=["get", "list", "watch"],
+                  )
+              ]
+
+              edit_rules = [
+                  client.V1PolicyRule(
+                      api_groups=["", "apps", "batch"],
+                      resources=[
+                          "pods",
+                          "pods/log",
+                          "services",
+                          "configmaps",
+                          "deployments",
+                          "replicasets",
+                          "statefulsets",
+                          "daemonsets",
+                          "jobs",
+                          "cronjobs",
+                      ],
+                      verbs=[
+                          "get",
+                          "list",
+                          "watch",
+                          "create",
+                          "update",
+                          "patch",
+                          "delete",
+                      ],
+                  )
+              ]
+
+              admin_rules = [
+                  client.V1PolicyRule(
+                      api_groups=["*"],
+                      resources=["*"],
+                      verbs=["*"],
+                  )
+              ]
+
+              create_or_patch_role(namespace, "namespace-view", view_rules, logger)
+              create_or_patch_role(namespace, "namespace-edit", edit_rules, logger)
+              create_or_patch_role(namespace, "namespace-admin", admin_rules, logger)
+
+              create_or_patch_rolebinding(
+                  namespace=namespace,
+                  rolebinding_name=f"{namespace}-viewers",
+                  role_name="namespace-view",
+                  group_name=f"{namespace}:viewers",
+                  logger=logger,
+              )
+
+              create_or_patch_rolebinding(
+                  namespace=namespace,
+                  rolebinding_name=f"{namespace}-editors",
+                  role_name="namespace-edit",
+                  group_name=f"{namespace}:editors",
+                  logger=logger,
+              )
+
+              create_or_patch_rolebinding(
+                  namespace=namespace,
+                  rolebinding_name=f"{namespace}-admins",
+                  role_name="namespace-admin",
+                  group_name=f"{namespace}:admins",
+                  logger=logger,
+              )
+
+
+          @kopf.on.create("", "v1", "namespaces")
+          def on_namespace_create(name, logger, **kwargs):
+              logger.info(f"Namespace created: {name}")
+              ensure_namespace_rbac(name, logger)
+
+
+          @kopf.on.resume("", "v1", "namespaces")
+          def on_namespace_resume(name, logger, **kwargs):
+              logger.info(f"Namespace resumed: {name}")
+              ensure_namespace_rbac(name, logger)
+
+
+          def container_missing_resources(container: dict) -> bool:
+              resources = container.get("resources") or {}
+              requests = resources.get("requests") or {}
+              limits = resources.get("limits") or {}
+
+              has_requests = bool(requests.get("cpu")) and bool(requests.get("memory"))
+              has_limits = bool(limits.get("cpu")) and bool(limits.get("memory"))
+
+              return not (has_requests and has_limits)
+
+
+          def validate_pod_resources(name: str, namespace: str, body: dict, logger):
+              if namespace in SYSTEM_NAMESPACES:
+                  return
+
+              spec = body.get("spec") or {}
+              containers = spec.get("containers") or []
+
+              if not containers:
+                  return
+
+              missing = [
+                  container.get("name", "unknown")
+                  for container in containers
+                  if container_missing_resources(container)
+              ]
+
+              if not missing:
+                  return
+
+              message = "Missing CPU/memory requests or limits for containers: " + ", ".join(missing)
+
+              core.patch_namespaced_pod(
+                  name=name,
+                  namespace=namespace,
+                  body={
+                      "metadata": {
+                          "annotations": {
+                              "operator/resource-warning": message
+                          }
+                      }
+                  },
+              )
+
+              logger.info(f"Annotated Pod {namespace}/{name}: {message}")
+
+
+          def debug_enabled(annotations: dict) -> bool:
+              value = str((annotations or {}).get("debug", "")).lower()
+              return value in ["true", "yes", "1", "enabled"]
+
+
+          def find_container_port(body: dict) -> int:
+              spec = body.get("spec") or {}
+              containers = spec.get("containers") or []
+
+              for container in containers:
+                  ports = container.get("ports") or []
+                  for port in ports:
+                      container_port = port.get("containerPort")
+                      if container_port:
+                          return int(container_port)
+
+              return 80
+
+
+          def ensure_debug_nodeport_service(name: str, namespace: str, body: dict, logger):
+              if namespace in SYSTEM_NAMESPACES:
+                  return
+
+              metadata = body.get("metadata") or {}
+              annotations = metadata.get("annotations") or {}
+
+              if not debug_enabled(annotations):
+                  return
+
+              service_name = f"debug-{name}"
+              container_port = find_container_port(body)
+
+              selector_label_key = "lab12-debug"
+              selector_label_value = name
+
+              core.patch_namespaced_pod(
+                  name=name,
+                  namespace=namespace,
+                  body={
+                      "metadata": {
+                          "labels": {
+                              selector_label_key: selector_label_value
+                          },
+                          "annotations": {
+                              "operator/debug-service": service_name
+                          },
+                      }
+                  },
+              )
+
+              service = client.V1Service(
+                  metadata=client.V1ObjectMeta(
+                      name=service_name,
+                      namespace=namespace,
+                      labels={
+                          "app.kubernetes.io/managed-by": "namespace-operator",
+                          "lab": "lab12",
+                      },
+                  ),
+                  spec=client.V1ServiceSpec(
+                      type="NodePort",
+                      selector={
+                          selector_label_key: selector_label_value
+                      },
+                      ports=[
+                          client.V1ServicePort(
+                              name="debug",
+                              protocol="TCP",
+                              port=container_port,
+                              target_port=container_port,
+                          )
+                      ],
+                  ),
+              )
+
+              try:
+                  core.create_namespaced_service(namespace=namespace, body=service)
+                  logger.info(
+                      f"Created NodePort Service {namespace}/{service_name} for Pod {name} on port {container_port}"
+                  )
+              except ApiException as e:
+                  if e.status == 409:
+                      core.patch_namespaced_service(
+                          name=service_name,
+                          namespace=namespace,
+                          body=service,
+                      )
+                      logger.info(
+                          f"Patched existing NodePort Service {namespace}/{service_name}"
+                      )
+                  else:
+                      raise
+
+
+          @kopf.on.create("", "v1", "pods")
+          def on_pod_create(name, namespace, body, logger, **kwargs):
+              logger.info(f"Pod created: {namespace}/{name}")
+              validate_pod_resources(name, namespace, body, logger)
+              ensure_debug_nodeport_service(name, namespace, body, logger)
+
+
+          @kopf.on.resume("", "v1", "pods")
+          def on_pod_resume(name, namespace, body, logger, **kwargs):
+              validate_pod_resources(name, namespace, body, logger)
+              ensure_debug_nodeport_service(name, namespace, body, logger)
+
+
+          @kopf.on.field("", "v1", "pods", field="metadata.annotations")
+          def on_pod_annotation_change(name, namespace, body, logger, **kwargs):
+              logger.info(f"Pod annotations changed: {namespace}/{name}")
+              ensure_debug_nodeport_service(name, namespace, body, logger)
 
     - name: Write Dockerfile for operator
       copy:
-        dest: /home/vagrant/namespace-operator/Dockerfile
+        dest: "{{ operator_dir }}/Dockerfile"
+        owner: vagrant
+        group: vagrant
+        mode: "0644"
         content: |
           FROM python:3.11-slim
+
           WORKDIR /app
-          RUN pip install --no-cache-dir kopf kubernetes
+
+          COPY requirements.txt .
+          RUN pip install --no-cache-dir -r requirements.txt
+
           COPY operator.py .
-          CMD ["kopf", "run", "--all-namespaces", "/app/operator.py"]
 
-    - name: Build operator Docker image
-      shell: |
-        docker build -t namespace-operator:latest /home/vagrant/namespace-operator/
-      args:
-        creates: /tmp/operator-image-built
+          CMD ["kopf", "run", "--standalone", "--all-namespaces", "/app/operator.py"]
 
-    - name: Mark image as built
-      file:
-        path: /tmp/operator-image-built
-        state: touch
+    - name: Build operator Docker image fresh every time
+      shell: docker build --no-cache -t {{ operator_image }} {{ operator_dir }}
+      changed_when: true
 
-    - name: Export image from docker and import into containerd
-      shell: |
-        docker save namespace-operator:latest | \
-          ctr -n k8s.io images import -
-      args:
-        creates: /tmp/operator-image-imported
+    - name: Remove old operator image from containerd if exists
+      shell: ctr -n k8s.io images rm docker.io/library/{{ operator_image }} || true
+      changed_when: false
 
-    - name: Mark image as imported
-      file:
-        path: /tmp/operator-image-imported
-        state: touch
+    - name: Import operator image into containerd
+      shell: docker save {{ operator_image }} | ctr -n k8s.io images import -
+      changed_when: true
 
-    - name: Write operator RBAC + Deployment manifest
+    - name: Write operator RBAC and Deployment manifest
       copy:
-        dest: /home/vagrant/namespace-operator/deploy.yaml
+        dest: "{{ operator_dir }}/operator-manifest.yaml"
+        owner: vagrant
+        group: vagrant
+        mode: "0644"
         content: |
           apiVersion: v1
           kind: ServiceAccount
           metadata:
             name: namespace-operator
             namespace: kube-system
-
           ---
           apiVersion: rbac.authorization.k8s.io/v1
           kind: ClusterRole
@@ -318,39 +673,43 @@
           rules:
             - apiGroups: [""]
               resources: ["namespaces"]
-              verbs: ["get", "list", "watch"]
+              verbs: ["get", "list", "watch", "patch", "update"]
+
+            - apiGroups: [""]
+              resources: ["pods"]
+              verbs: ["get", "list", "watch", "patch", "update"]
+
+            - apiGroups: [""]
+              resources: ["services"]
+              verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
             - apiGroups: ["rbac.authorization.k8s.io"]
-              resources: ["rolebindings"]
-              verbs: ["get", "list", "watch", "create", "update", "patch"]
+              resources: ["roles", "rolebindings"]
+              verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
             - apiGroups: [""]
               resources: ["events"]
               verbs: ["create", "patch"]
-            - apiGroups: ["coordination.k8s.io"]
-              resources: ["leases"]
-              verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 
           ---
           apiVersion: rbac.authorization.k8s.io/v1
           kind: ClusterRoleBinding
           metadata:
             name: namespace-operator
-          roleRef:
-            apiGroup: rbac.authorization.k8s.io
-            kind: ClusterRole
-            name: namespace-operator
           subjects:
             - kind: ServiceAccount
               name: namespace-operator
               namespace: kube-system
-
+          roleRef:
+            kind: ClusterRole
+            name: namespace-operator
+            apiGroup: rbac.authorization.k8s.io
           ---
           apiVersion: apps/v1
           kind: Deployment
           metadata:
             name: namespace-operator
             namespace: kube-system
-            labels:
-              app: namespace-operator
           spec:
             replicas: 1
             selector:
@@ -366,49 +725,138 @@
                   - name: operator
                     image: namespace-operator:latest
                     imagePullPolicy: Never
-                    resources:
-                      requests:
-                        cpu: "50m"
-                        memory: "64Mi"
-                      limits:
-                        cpu: "200m"
-                        memory: "128Mi"
 
     - name: Apply operator manifests
-      shell: kubectl apply -f /home/vagrant/namespace-operator/deploy.yaml
-      run_once: true
+      shell: kubectl apply -f {{ operator_dir }}/operator-manifest.yaml
+      changed_when: false
 
-    - name: Wait for operator pod ready
-      shell: |
-        kubectl wait --for=condition=Ready pod \
-          -l app=namespace-operator \
-          -n kube-system --timeout=120s
+    - name: Restart operator deployment after image update
+      shell: kubectl rollout restart deployment/{{ operator_deployment }} -n {{ operator_namespace }}
+      changed_when: false
+
+    - name: Wait for operator rollout
+      shell: kubectl rollout status deployment/{{ operator_deployment }} -n {{ operator_namespace }} --timeout=180s
+      changed_when: false
+
+    - name: Give Kopf operator time to start watches
+      shell: sleep 15
+      changed_when: false
+
+    - name: Show operator pod
+      shell: kubectl get pods -n {{ operator_namespace }} -l app={{ operator_deployment }} -o wide
+      register: operator_pods
+      changed_when: false
+
+    - name: Print operator pod
+      debug:
+        msg: "{{ operator_pods.stdout_lines }}"
+
+    - name: Delete old test namespace
+      shell: kubectl delete namespace {{ test_namespace }} --ignore-not-found
+      changed_when: false
+
+    - name: Wait until old test namespace is deleted
+      shell: kubectl wait --for=delete namespace/{{ test_namespace }} --timeout=120s || true
+      changed_when: false
 
     - name: Create test namespace
-      shell: kubectl create namespace team-alpha --dry-run=client -o yaml | kubectl apply -f -
+      shell: kubectl create namespace {{ test_namespace }}
+      changed_when: true
 
     - name: Wait for RoleBindings to be created by operator
       shell: |
-        sleep 5
-        kubectl get rolebinding -n team-alpha
-      register: rb_result
+        kubectl get rolebinding {{ test_namespace }}-viewers -n {{ test_namespace }} &&
+        kubectl get rolebinding {{ test_namespace }}-editors -n {{ test_namespace }} &&
+        kubectl get rolebinding {{ test_namespace }}-admins  -n {{ test_namespace }}
+      register: rolebinding_check
+      retries: 12
+      delay: 5
+      until: rolebinding_check.rc == 0
+      changed_when: false
 
-    - name: Confirm all three RoleBindings exist
-      shell: |
-        kubectl get rolebinding team-alpha:viewers -n team-alpha
-        kubectl get rolebinding team-alpha:editors -n team-alpha
-        kubectl get rolebinding team-alpha:admins  -n team-alpha
-      register: confirm_result
+    - name: Print Roles and RoleBindings
+      shell: kubectl get roles,rolebindings -n {{ test_namespace }}
+      register: rbac_output
+      changed_when: false
 
-    - name: Print RoleBinding confirmation
+    - name: Show RBAC output
       debug:
-        msg: "{{ confirm_result.stdout_lines }}"
+        msg: "{{ rbac_output.stdout_lines }}"
 
-  handlers:
-    - name: Restart ContainerD
-      service:
-        name: containerd
-        state: restarted
+    - name: Create Edge test pod without resource limits
+      shell: |
+        cat <<EOF | kubectl apply -f -
+        apiVersion: v1
+        kind: Pod
+        metadata:
+          name: edge-test
+          namespace: {{ test_namespace }}
+        spec:
+          containers:
+            - name: nginx
+              image: nginx:alpine
+        EOF
+      changed_when: true
 
-    - name: Reload sysctl
-      command: sysctl --system
+    - name: Wait for Edge resource-warning annotation
+      shell: |
+        kubectl get pod edge-test -n {{ test_namespace }} -o json | grep -q "operator/resource-warning"
+      register: edge_annotation_check
+      retries: 12
+      delay: 5
+      until: edge_annotation_check.rc == 0
+      changed_when: false
+
+    - name: Print Edge annotation value
+      shell: kubectl get pod edge-test -n {{ test_namespace }} -o jsonpath='{.metadata.annotations}'
+      register: edge_annotation
+      changed_when: false
+
+    - name: Show Edge annotation
+      debug:
+        msg: "{{ edge_annotation.stdout }}"
+
+    - name: Create Target test pod with debug annotation and containerPort
+      shell: |
+        cat <<EOF | kubectl apply -f -
+        apiVersion: v1
+        kind: Pod
+        metadata:
+          name: debug-test
+          namespace: {{ test_namespace }}
+          annotations:
+            debug: "true"
+        spec:
+          containers:
+            - name: nginx
+              image: nginx:alpine
+              ports:
+                - containerPort: 80
+        EOF
+      changed_when: true
+
+    - name: Wait for debug NodePort service to appear
+      shell: kubectl get svc debug-debug-test -n {{ test_namespace }}
+      register: debug_service_check
+      retries: 12
+      delay: 5
+      until: debug_service_check.rc == 0
+      changed_when: false
+
+    - name: Print debug service
+      shell: kubectl get svc debug-debug-test -n {{ test_namespace }} -o wide
+      register: debug_service_output
+      changed_when: false
+
+    - name: Show debug service
+      debug:
+        msg: "{{ debug_service_output.stdout_lines }}"
+
+    - name: Show operator logs
+      shell: kubectl logs -n {{ operator_namespace }} deployment/{{ operator_deployment }} --tail=100
+      register: operator_logs
+      changed_when: false
+
+    - name: Print operator logs
+      debug:
+        msg: "{{ operator_logs.stdout_lines }}"

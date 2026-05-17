@@ -6,10 +6,10 @@ image:
   pullPolicy: IfNotPresent
 
 auth: 
-  database: keycloak
-  username: keycloak
-  password: "keycloak"
-  postgresPassword: "keycloak"
+  database: authentik
+  username: authentik
+  password: "authentik"
+  postgresPassword: "authentik"
 
   existingSecret: ""
   secretKeys: 
