@@ -1,4 +1,3 @@
-
 - name: Setup Load Balancer
   hosts: lb
   become: yes
@@ -56,9 +55,37 @@
         state: started
         enabled: yes
 
+    - name: Create Keepalived runtime secret directory
+      file:
+        path: /etc/keepalived/secrets
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+
+    - name: Generate Keepalived VRRP auth pass at runtime
+      shell: |
+        set -e
+        if [ ! -f /etc/keepalived/secrets/vrrp_pass ]; then
+          openssl rand -hex 4 > /etc/keepalived/secrets/vrrp_pass
+          chmod 600 /etc/keepalived/secrets/vrrp_pass
+        fi
+      args:
+        creates: /etc/keepalived/secrets/vrrp_pass
+      no_log: true
+
+    - name: Read Keepalived VRRP auth pass
+      slurp:
+        src: /etc/keepalived/secrets/vrrp_pass
+      register: keepalived_vrrp_pass
+      no_log: true
+
     - name: Configure Keepalived for VIP management
       copy:
         dest: /etc/keepalived/keepalived.conf
+        owner: root
+        group: root
+        mode: '0600'
         content: |
           vrrp_instance VI_1 {
               state MASTER
@@ -68,13 +95,14 @@
               advert_int 1
               authentication {
                   auth_type PASS
-                  auth_pass 42
+                  auth_pass {{ keepalived_vrrp_pass.content | b64decode | trim }}
               }
               virtual_ipaddress {
                   192.168.56.5
               }
           }
       notify: Restart Keepalived
+      no_log: true
 
     - name: Ensure Keepalived is started and enabled
       systemd:
@@ -728,16 +756,13 @@
         kubectl patch svc argocd-server -n argocd \
           -p '{"spec": {"type": "NodePort"}}'
 
-    - name: Get ArgoCD admin password
+    - name: Get ArgoCD admin password without printing it
       shell: |
         kubectl -n argocd get secret argocd-initial-admin-secret \
           -o jsonpath="{.data.password}" | base64 -d
       register: argocd_admin_password
-
-    - name: Display ArgoCD admin password
-      debug:
-        msg: "ArgoCD admin password: {{ argocd_admin_password.stdout }}"
-
+      no_log: true
+      run_once: true
 
 - name: Setup for DB node
   hosts: db
@@ -834,8 +859,341 @@
           -p '{"spec": {"type": "NodePort"}}'
       run_once: true
 
+    # Insert before "Boostrap ArgoCD with a app of applications" in project/Setup.yml.
+    - name: Create namespaces needed before runtime secrets
+      shell: |
+        kubectl create namespace postgres --dry-run=client -o yaml | kubectl apply -f -
+        kubectl create namespace authentik --dry-run=client -o yaml | kubectl apply -f -
+        kubectl create namespace demo-app --dry-run=client -o yaml | kubectl apply -f -
+      run_once: true
+
+    - name: Generate PostgreSQL and Authentik runtime secrets without storing them in Git
+      shell: |
+        set -euo pipefail
+        PG_APP_PASS="$(openssl rand -base64 36)"
+
+        PG_ADMIN_PASS="$(openssl rand -base64 36)"
+        AUTHENTIK_SECRET_KEY="$(openssl rand -base64 60)"
+        AUTHENTIK_BOOTSTRAP_PASSWORD="$(openssl rand -base64 24)"
+        AUTHENTIK_BOOTSTRAP_TOKEN="$(openssl rand -base64 36)"
+
+        kubectl create secret generic postgres-postgresql -n postgres \
+          --from-literal=password="$PG_APP_PASS" \
+          --from-literal=postgres-password="$PG_ADMIN_PASS" \
+          --dry-run=client -o yaml | kubectl apply -f -
+
+        kubectl create secret generic authentik-runtime-secret -n authentik \
+          --from-literal=AUTHENTIK_SECRET_KEY="$AUTHENTIK_SECRET_KEY" \
+          --dry-run=client -o yaml | kubectl apply -f -
+
+        kubectl create secret generic authentik-bootstrap-secret -n authentik \
+          --from-literal=AUTHENTIK_BOOTSTRAP_PASSWORD="$AUTHENTIK_BOOTSTRAP_PASSWORD" \
+          --from-literal=AUTHENTIK_BOOTSTRAP_EMAIL="admin@example.com" \
+          --from-literal=AUTHENTIK_BOOTSTRAP_TOKEN="$AUTHENTIK_BOOTSTRAP_TOKEN" \
+          --dry-run=client -o yaml | kubectl apply -f -
+      args:
+        executable: /bin/bash
+      no_log: true
+      run_once: true
+
+    - name: Print safe secret retrieval instructions
+      debug:
+        msg:
+          - "Secrets were generated at runtime and were not printed."
+          - "To retrieve Authentik bootstrap password on the master only: kubectl get secret authentik-bootstrap-secret -n authentik -o jsonpath='{.data.AUTHENTIK_BOOTSTRAP_PASSWORD}' | base64 -d; echo"
+      run_once: true
+
+
     - name: Boostrap ArgoCD with a app of applications
       shell: |
         kubectl apply -f https://raw.githubusercontent.com/Odasaku-Khan/DevOpsII/main/project/apps/app-of-apps.yaml
       run_once: true
-    
+
+- name: Setup protected portal demo behind Authentik
+  hosts: master
+  become: yes
+  tasks:
+    - name: Apply protected portal blue/green application
+      shell: |
+        cat <<'MANIFEST' | kubectl apply -f -
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: demo-app
+        ---
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: portal-blue-html
+          namespace: demo-app
+        data:
+          index.html: |
+            <html>
+            <body style="font-family: Arial; background:#0f172a; color:white; padding:40px;">
+              <h1>Protected Internal Portal - BLUE</h1>
+              <p>This page is protected by Authentik.</p>
+              <ul>
+                <li>Infrastructure Report</li>
+                <li>Database Backup Policy</li>
+                <li>Worker Node Hardening Checklist</li>
+              </ul>
+            </body>
+            </html>
+        ---
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: portal-green-html
+          namespace: demo-app
+        data:
+          index.html: |
+            <html>
+            <body style="font-family: Arial; background:#064e3b; color:white; padding:40px;">
+              <h1>Protected Internal Portal - GREEN</h1>
+              <p>This is the updated green version protected by Authentik.</p>
+              <ul>
+                <li>Infrastructure Report v2</li>
+                <li>Updated Database Backup Policy</li>
+                <li>Improved Worker Node Hardening Checklist</li>
+              </ul>
+            </body>
+            </html>
+        ---
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: portal-blue
+          namespace: demo-app
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app: protected-portal
+              version: blue
+          template:
+            metadata:
+              labels:
+                app: protected-portal
+                version: blue
+            spec:
+              containers:
+                - name: nginx
+                  image: nginx:1.27-alpine
+                  ports:
+                    - containerPort: 80
+                  volumeMounts:
+                    - name: html
+                      mountPath: /usr/share/nginx/html/index.html
+                      subPath: index.html
+              volumes:
+                - name: html
+                  configMap:
+                    name: portal-blue-html
+        ---
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: portal-green
+          namespace: demo-app
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app: protected-portal
+              version: green
+          template:
+            metadata:
+              labels:
+                app: protected-portal
+                version: green
+            spec:
+              containers:
+                - name: nginx
+                  image: nginx:1.27-alpine
+                  ports:
+                    - containerPort: 80
+                  volumeMounts:
+                    - name: html
+                      mountPath: /usr/share/nginx/html/index.html
+                      subPath: index.html
+              volumes:
+                - name: html
+                  configMap:
+                    name: portal-green-html
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: protected-portal
+          namespace: demo-app
+        spec:
+          type: ClusterIP
+          selector:
+            app: protected-portal
+            version: blue
+          ports:
+            - name: http
+              port: 80
+              targetPort: 80
+        MANIFEST
+      run_once: true
+
+    - name: Apply NetworkPolicies for Authentik protected portal access
+      shell: |
+        cat <<'MANIFEST' | kubectl apply -f -
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        metadata:
+          name: demo-app-default-deny-ingress
+          namespace: demo-app
+        spec:
+          podSelector: {}
+          policyTypes:
+            - Ingress
+        ---
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        metadata:
+          name: demo-app-allow-authentik-ingress
+          namespace: demo-app
+        spec:
+          podSelector:
+            matchLabels:
+              app: protected-portal
+          policyTypes:
+            - Ingress
+          ingress:
+            - from:
+                - namespaceSelector:
+                    matchLabels:
+                      kubernetes.io/metadata.name: authentik
+              ports:
+                - protocol: TCP
+                  port: 80
+        ---
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        metadata:
+          name: authentik-allow-demo-app-egress
+          namespace: authentik
+        spec:
+          podSelector: {}
+          policyTypes:
+            - Egress
+          egress:
+            - to:
+                - namespaceSelector:
+                    matchLabels:
+                      kubernetes.io/metadata.name: demo-app
+              ports:
+                - protocol: TCP
+                  port: 80
+        MANIFEST
+      run_once: true
+      ignore_errors: yes
+
+    - name: Wait for protected portal blue and green deployments
+      shell: |
+        kubectl wait --for=condition=available deploy/portal-blue -n demo-app --timeout=180s
+        kubectl wait --for=condition=available deploy/portal-green -n demo-app --timeout=180s
+      run_once: true
+
+    - name: Create protected portal blue/green switch helper
+      copy:
+        dest: /home/vagrant/protected-portal-switch.sh
+        owner: vagrant
+        group: vagrant
+        mode: '0755'
+        content: |
+          #!/bin/bash
+          set -euo pipefail
+
+          COLOR="${1:-blue}"
+          if [ "$COLOR" != "blue" ] && [ "$COLOR" != "green" ]; then
+            echo "Usage: $0 blue|green"
+            exit 1
+          fi
+
+          kubectl patch svc protected-portal -n demo-app --type='merge' -p="{\"spec\":{\"selector\":{\"app\":\"protected-portal\",\"version\":\"$COLOR\"}}}"
+          kubectl get endpoints protected-portal -n demo-app -o wide
+          echo "Open: http://hello.local:30080/?demo=$COLOR"
+
+    - name: Keep protected portal on blue by default
+      shell: |
+        kubectl patch svc protected-portal -n demo-app --type='merge' -p='{"spec":{"selector":{"app":"protected-portal","version":"blue"}}}'
+        kubectl get endpoints protected-portal -n demo-app -o wide
+      run_once: true
+
+    - name: Test protected portal from Authentik namespace when Authentik exists
+      shell: |
+        kubectl get namespace authentik >/dev/null
+        kubectl run curl-authentik -n authentik --rm -i \
+          --image=curlimages/curl --restart=Never -- \
+          curl -I --max-time 10 http://protected-portal.demo-app.svc.cluster.local
+      run_once: true
+      ignore_errors: yes
+
+    - name: Patch Authentik production service to blue when Authentik exists
+      shell: |
+        kubectl patch svc authentik -n authentik --type='merge' -p='{
+          "spec": {
+            "selector": {
+              "app.kubernetes.io/name": "authentik",
+              "app.kubernetes.io/component": "server",
+              "app.kubernetes.io/instance": "authentik-blue"
+            }
+          }
+        }'
+      run_once: true
+      ignore_errors: yes
+
+    - name: Patch Authentik DB settings for protected portal provider when stack exists
+      shell: |
+        set -e
+        kubectl wait --for=condition=Ready pod/postgres-postgresql-0 -n postgres --timeout=300s
+        PG_APP_PASS=$(kubectl get secret postgres-postgresql -n postgres -o jsonpath='{.data.password}' | base64 -d)
+
+        kubectl exec -i -n postgres postgres-postgresql-0 -- env PGPASSWORD="$PG_APP_PASS" \
+          psql -U authentik -d authentik -v ON_ERROR_STOP=1 <<'SQL'
+        ALTER TABLE public.authentik_rbac_initialpermissions
+        ADD COLUMN IF NOT EXISTS "mode" text NOT NULL DEFAULT 'role';
+
+        UPDATE public.authentik_providers_proxy_proxyprovider pp
+        SET internal_host = 'http://protected-portal.demo-app.svc.cluster.local',
+            external_host = 'http://hello.local:30080',
+            internal_host_ssl_validation = false
+        FROM public.authentik_providers_oauth2_oauth2provider oauth
+        JOIN public.authentik_core_provider cp
+          ON oauth.provider_ptr_id = cp.id
+        WHERE pp.oauth2provider_ptr_id = oauth.provider_ptr_id
+          AND cp.name = 'Provider for Video';
+
+        UPDATE public.authentik_core_application
+        SET meta_launch_url = 'http://hello.local:30080/'
+        WHERE slug = 'video';
+
+        UPDATE public.authentik_outposts_outpost
+        SET _config =
+          jsonb_set(
+            jsonb_set(
+              COALESCE(_config, '{}'::jsonb),
+              '{authentik_host}',
+              '"http://192.168.56.12:30080"'::jsonb,
+              true
+            ),
+            '{authentik_host_browser}',
+            '"http://192.168.56.12:30080"'::jsonb,
+            true
+          )
+        WHERE name = 'authentik Embedded Outpost';
+        SQL
+      run_once: true
+      ignore_errors: yes
+      no_log: true
+
+    - name: Restart Authentik blue server after optional DB patch
+      shell: |
+        kubectl rollout restart deploy/authentik-blue-server -n authentik
+        kubectl rollout status deploy/authentik-blue-server -n authentik --timeout=300s
+      run_once: true
+      ignore_errors: yes

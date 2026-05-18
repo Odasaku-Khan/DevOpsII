@@ -9,6 +9,8 @@ metadata:
     {{- toYaml . | nindent 4 }}
     {{- end }}
 spec:
+  strategy:
+    type: Recreate
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
   {{- end }}
@@ -42,61 +44,68 @@ spec:
           ports:
             - name: http
               containerPort: 9000
+            - name: metrics
+              containerPort: 9300
           env:
             - name: AUTHENTIK_POSTGRESQL__HOST
               value: {{ .Values.authentik.postgresql.host | quote }}
-
             - name: AUTHENTIK_POSTGRESQL__PORT
               value: {{ .Values.authentik.postgresql.port | quote }}
-
             - name: AUTHENTIK_POSTGRESQL__NAME
               value: {{ .Values.authentik.postgresql.name | quote }}
-
             - name: AUTHENTIK_POSTGRESQL__USER
               value: {{ .Values.authentik.postgresql.user | quote }}
-
             - name: AUTHENTIK_POSTGRESQL__PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "authentik.fullname" . }}-secret
-                  key: AUTHENTIK_POSTGRESQL__PASSWORD
-
+                  name: {{ required "authentik.postgresql.existingSecret is required" .Values.authentik.postgresql.existingSecret | quote }}
+                  key: {{ .Values.authentik.postgresql.passwordKey | quote }}
             - name: AUTHENTIK_SECRET_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "authentik.fullname" . }}-secret
-                  key: AUTHENTIK_SECRET_KEY
-
+                  name: {{ required "authentik.secret.existingSecret is required" .Values.authentik.secret.existingSecret | quote }}
+                  key: {{ .Values.authentik.secret.secretKeyKey | quote }}
+            {{- if .Values.authentik.bootstrap.enabled }}
             - name: AUTHENTIK_BOOTSTRAP_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "authentik.fullname" . }}-secret
-                  key: AUTHENTIK_BOOTSTRAP_PASSWORD
-
+                  name: {{ required "authentik.bootstrap.existingSecret is required" .Values.authentik.bootstrap.existingSecret | quote }}
+                  key: {{ .Values.authentik.bootstrap.passwordKey | quote }}
             - name: AUTHENTIK_BOOTSTRAP_EMAIL
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "authentik.fullname" . }}-secret
-                  key: AUTHENTIK_BOOTSTRAP_EMAIL
+                  name: {{ required "authentik.bootstrap.existingSecret is required" .Values.authentik.bootstrap.existingSecret | quote }}
+                  key: {{ .Values.authentik.bootstrap.emailKey | quote }}
             - name: AUTHENTIK_BOOTSTRAP_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: "{{ include "authentik.fullname" . }}-secret"
-                  key: AUTHENTIK_BOOTSTRAP_TOKEN
+                  name: {{ required "authentik.bootstrap.existingSecret is required" .Values.authentik.bootstrap.existingSecret | quote }}
+                  key: {{ .Values.authentik.bootstrap.tokenKey | quote }}
+            {{- end }}
+          startupProbe:
+            httpGet:
+              path: /-/health/live/
+              port: 9000
+            initialDelaySeconds: {{ .Values.startupProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.startupProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.startupProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.startupProbe.failureThreshold }}
           readinessProbe:
             httpGet:
               path: /-/health/ready/
               port: 9000
-            initialDelaySeconds: 60
-            periodSeconds: 10
-            failureThreshold: 12
+            initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.readinessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.readinessProbe.failureThreshold }}
           livenessProbe:
             httpGet:
               path: /-/health/live/
               port: 9000
-            initialDelaySeconds: 120
-            periodSeconds: 20
-            failureThreshold: 6
+            initialDelaySeconds: {{ .Values.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.livenessProbe.failureThreshold }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       volumes:

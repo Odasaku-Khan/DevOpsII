@@ -1,0 +1,119 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo-app
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: portal-blue-html
+  namespace: demo-app
+data:
+  index.html: |
+    <html>
+    <body style="font-family: Arial; background:#0f172a; color:white; padding:40px;">
+      <h1>Protected Internal Portal - BLUE</h1>
+      <p>This page is protected by Authentik.</p>
+      <ul>
+        <li>Infrastructure Report</li>
+        <li>Database Backup Policy</li>
+        <li>Worker Node Hardening Checklist</li>
+      </ul>
+    </body>
+    </html>
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: portal-green-html
+  namespace: demo-app
+data:
+  index.html: |
+    <html>
+    <body style="font-family: Arial; background:#064e3b; color:white; padding:40px;">
+      <h1>Protected Internal Portal - GREEN</h1>
+      <p>This is the updated green version.</p>
+      <ul>
+        <li>Infrastructure Report v2</li>
+        <li>Updated Backup Policy</li>
+        <li>Improved Worker Node Checklist</li>
+      </ul>
+    </body>
+    </html>
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: portal-blue
+  namespace: demo-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: protected-portal
+      version: blue
+  template:
+    metadata:
+      labels:
+        app: protected-portal
+        version: blue
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.27-alpine
+          ports:
+            - containerPort: 80
+          volumeMounts:
+            - name: html
+              mountPath: /usr/share/nginx/html/index.html
+              subPath: index.html
+      volumes:
+        - name: html
+          configMap:
+            name: portal-blue-html
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: portal-green
+  namespace: demo-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: protected-portal
+      version: green
+  template:
+    metadata:
+      labels:
+        app: protected-portal
+        version: green
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.27-alpine
+          ports:
+            - containerPort: 80
+          volumeMounts:
+            - name: html
+              mountPath: /usr/share/nginx/html/index.html
+              subPath: index.html
+      volumes:
+        - name: html
+          configMap:
+            name: portal-green-html
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: protected-portal
+  namespace: demo-app
+spec:
+  type: ClusterIP
+  selector:
+    app: protected-portal
+    version: blue
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80

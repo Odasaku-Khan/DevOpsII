@@ -1,25 +1,17 @@
 replicaCount: 1
 
 image:
-  tag: "2025.12"
+  tag: "2025.12.1"
 
 extraLabels:
   version: green
 
+authentik:
+  bootstrap:
+    enabled: false
+
 worker:
   replicaCount: 1
 
-authentik:
-  postgresql:
-    host: postgres-postgresql.postgres.svc.cluster.local
-    port: "5432"
-    user: authentik
-    password: authentik
-    name: authentik
-
 autoscaling:
   enabled: true
-  minReplicas: 1
-  maxReplicas: 1
-  targetCPUUtilizationPercentage: 90
-
