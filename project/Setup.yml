@@ -859,7 +859,6 @@
           -p '{"spec": {"type": "NodePort"}}'
       run_once: true
 
-    # Insert before "Boostrap ArgoCD with a app of applications" in project/Setup.yml.
     - name: Create namespaces needed before runtime secrets
       shell: |
         kubectl create namespace postgres --dry-run=client -o yaml | kubectl apply -f -
