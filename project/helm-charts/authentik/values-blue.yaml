@@ -12,7 +12,7 @@ authentik:
     port: "5432"
     user: authentik
     password: authentik
-    name: authentik_blue
+    name: authentik
 
 worker:
   replicaCount: 1

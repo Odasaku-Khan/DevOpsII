@@ -792,6 +792,12 @@
         path: /tmp/longhorn-installed
         state: touch
 
+    - name: Patch svc longhorn-frontend to NodePort
+      shell: |
+        kubectl patch svc longhorn-frontend -n longhorn-system \
+          -p '{"spec": {"type": "NodePort"}}'
+      run_once: true
+
 
     - name: Install full observability stack (Prometheus + Loki + Grafana)
       shell: |
@@ -820,6 +826,12 @@
           --set grafana.additionalDataSources[0].access=proxy \
           --set grafana.sidecar.dashboards.enabled=true \
           --set grafana.sidecar.dashboards.label=grafana_dashboard
+      run_once: true
+
+    - name: Patch svc grafana to NodePort
+      shell: |
+        kubectl patch svc loki-grafana -n monitoring \
+          -p '{"spec": {"type": "NodePort"}}'
       run_once: true
 
     - name: Boostrap ArgoCD with a app of applications
