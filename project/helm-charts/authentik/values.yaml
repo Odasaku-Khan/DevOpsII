@@ -98,7 +98,7 @@ startupProbe:
 
 readinessProbe:
   enabled: true
-  initialDelaySeconds: 120
+  initialDelaySeconds: 240
   periodSeconds: 10
   timeoutSeconds: 5
   failureThreshold: 18
