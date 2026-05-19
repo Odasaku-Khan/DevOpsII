@@ -8,3 +8,25 @@ spec:
   checkType: final-defense
   expected: blue-green-ready
   owner: Odasaku
+---
+apiVersion: devops.kbtu.kz/v1alpha1
+kind: PlatformCheck
+metadata:
+  name: postgres-persistence-check
+  namespace: postgres
+spec:
+  application: postgres
+  checkType: persistence
+  expected: pvc-bound-and-backup-job-created
+  owner: Odasaku
+---
+apiVersion: devops.kbtu.kz/v1alpha1
+kind: PlatformCheck
+metadata:
+  name: monitoring-alerting-check
+  namespace: monitoring
+spec:
+  application: monitoring
+  checkType: observability
+  expected: prometheus-grafana-loki-ready
+  owner: Odasaku
