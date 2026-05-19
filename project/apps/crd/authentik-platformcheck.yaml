@@ -1,0 +1,10 @@
+apiVersion: devops.kbtu.kz/v1alpha1
+kind: PlatformCheck
+metadata:
+  name: authentik-final-defense-check
+  namespace: authentik
+spec:
+  application: authentik
+  checkType: final-defense
+  expected: blue-green-ready
+  owner: Odasaku

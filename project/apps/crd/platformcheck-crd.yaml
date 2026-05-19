@@ -1,0 +1,45 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: platformchecks.devops.kbtu.kz
+spec:
+  group: devops.kbtu.kz
+  scope: Namespaced
+  names:
+    plural: platformchecks
+    singular: platformcheck
+    kind: PlatformCheck
+    shortNames:
+      - pcheck
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              required:
+                - application
+                - checkType
+                - expected
+              properties:
+                application:
+                  type: string
+                checkType:
+                  type: string
+                expected:
+                  type: string
+                owner:
+                  type: string
+            status:
+              type: object
+              properties:
+                state:
+                  type: string
+                lastChecked:
+                  type: string

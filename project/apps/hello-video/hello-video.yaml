@@ -2,7 +2,6 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: demo-app
-
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -12,94 +11,87 @@ metadata:
 data:
   index.html: |
     <!doctype html>
-    <html>
+    <html lang="en">
     <head>
       <meta charset="utf-8">
-      <title>Hello from Authentik</title>
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>Protected YouTube Video</title>
       <style>
         body {
-          font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-          background: radial-gradient(circle at top, #1e293b, #020617);
-          color: white;
-          height: 100vh;
           margin: 0;
+          min-height: 100vh;
+          font-family: Arial, sans-serif;
+          background: #0f172a;
+          color: white;
           display: flex;
           align-items: center;
           justify-content: center;
         }
-        .card {
-          width: 720px;
-          padding: 36px;
-          border-radius: 24px;
-          background: rgba(15, 23, 42, 0.9);
-          box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+
+        .page {
+          width: min(1000px, 92vw);
           text-align: center;
-          border: 1px solid rgba(148, 163, 184, 0.35);
         }
+
         h1 {
-          font-size: 42px;
-          margin-bottom: 12px;
+          margin-bottom: 8px;
         }
+
         p {
-          font-size: 18px;
           color: #cbd5e1;
-          line-height: 1.6;
+          margin-bottom: 24px;
         }
+
+        .video-wrapper {
+          position: relative;
+          width: 100%;
+          padding-bottom: 56.25%;
+          height: 0;
+          border-radius: 18px;
+          overflow: hidden;
+          box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+          background: black;
+        }
+
+        .video-wrapper iframe {
+          position: absolute;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          border: 0;
+        }
+
         .badge {
           display: inline-block;
+          margin-top: 20px;
           padding: 8px 14px;
-          margin: 6px;
           border-radius: 999px;
-          background: #0f766e;
-          font-weight: 700;
-        }
-        a {
-          display: inline-block;
-          margin-top: 24px;
-          padding: 14px 22px;
-          border-radius: 14px;
-          background: #38bdf8;
-          color: #082f49;
-          text-decoration: none;
-          font-weight: 800;
-        }
-        .terminal {
-          margin-top: 24px;
-          padding: 16px;
-          text-align: left;
-          background: #020617;
-          border-radius: 14px;
-          color: #22c55e;
-          font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+          background: rgba(34, 197, 94, 0.15);
+          color: #86efac;
+          font-size: 14px;
         }
       </style>
     </head>
     <body>
-      <div class="card">
-        <h1>Protected Hello Video App</h1>
-        <p>This page is served by Kubernetes, hidden behind Authentik Proxy Provider, because apparently even a hello-world page now needs enterprise-grade identity.</p>
+      <main class="page">
+        <h1>Protected Demo Video</h1>
+        <p>This video page is served from Kubernetes and protected through Authentik.</p>
 
-        <div>
-          <span class="badge">Kubernetes</span>
-          <span class="badge">Authentik SSO</span>
-          <span class="badge">NetworkPolicy</span>
-          <span class="badge">GitOps</span>
+        <div class="video-wrapper">
+          <iframe
+            src="https://www.youtube.com/embed/9Mnv2r2cHJA"
+            title="Protected Demo Video"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+            referrerpolicy="strict-origin-when-cross-origin"
+            allowfullscreen>
+          </iframe>
         </div>
 
-        <div class="terminal">
-          $ whoami<br>
-          authenticated-user<br><br>
-          $ deployment<br>
-          blue/green platform survived
-        </div>
-
-        <a href="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4" target="_blank">
-          Open Demo Video
-        </a>
-      </div>
+        <div class="badge">Kubernetes · Authentik · GitOps · Protected Video</div>
+      </main>
     </body>
     </html>
-
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -138,7 +130,6 @@ spec:
         - name: html
           configMap:
             name: hello-video-html
-
 ---
 apiVersion: v1
 kind: Service
